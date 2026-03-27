@@ -1,5 +1,6 @@
 .cache/
 .dalek/
+.direnv/
 .env.local
 third_party
 coverage.out

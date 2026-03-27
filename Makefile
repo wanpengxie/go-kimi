@@ -33,10 +33,23 @@ test-e2e: prepare-cache
 
 test-e2e-live: prepare-cache
 	@set -e; \
+	if command -v direnv >/dev/null 2>&1 && [[ -f .envrc ]]; then \
+		direnv allow . >/dev/null 2>&1 || true; \
+		if ! direnv exec . bash -lc '[[ -n "$${KIMI_API_KEY:-}" ]]'; then \
+			echo "KIMI_API_KEY is not set in direnv (.envrc), skipping live e2e tests."; \
+			exit 0; \
+		fi; \
+		direnv exec . env $(GOENV) $(GO) test -tags=e2e_live $(E2E_PKGS); \
+		exit 0; \
+	fi; \
 	if [[ -f .env.local ]]; then \
 		set -a; \
 		source .env.local; \
 		set +a; \
+	fi; \
+	if [[ -z "$${KIMI_API_KEY:-}" ]]; then \
+		echo "KIMI_API_KEY is not set, skipping live e2e tests."; \
+		exit 0; \
 	fi; \
 	$(GOENV) $(GO) test -tags=e2e_live $(E2E_PKGS)
 
