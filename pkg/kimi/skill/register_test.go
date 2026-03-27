@@ -236,6 +236,162 @@ func TestRegisterSkillsNestedSkillCallDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+func TestRegisterSkillsParallelSkillToolCallsRemainAvailable(t *testing.T) {
+	t.Parallel()
+
+	firstSkillRunGate := make(chan struct{})
+	provider := &scriptedProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{
+					ToolCall: &types.ToolCall{
+						ID:   "call-one",
+						Name: "skill:one",
+					},
+				},
+				{
+					ToolCall: &types.ToolCall{
+						ID:   "call-two",
+						Name: "skill:two",
+					},
+				},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "skill done"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "skill done"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "outer done"}},
+				{Done: true},
+			},
+		},
+		beforeStream: func(call int) {
+			if call == 1 {
+				<-firstSkillRunGate
+			}
+		},
+	}
+
+	baseRegistry := tools.NewMapToolRegistry(&noopTool{name: "echo"})
+	ctxStore := soul.NewSoulContext(t.TempDir())
+	wireCh := make(chan wire.WireMessage, 64)
+	engine := soul.NewSoul(provider, ctxStore, baseRegistry, wire.ChannelEmitter{Ch: wireCh}, "")
+	engine.SetYolo(false)
+
+	RegisterSkills(engine, map[string]*Skill{
+		"one": {
+			Name:        "one",
+			Description: "skill one",
+			Type:        "standard",
+			Content:     "You are skill one.",
+		},
+		"two": {
+			Name:        "two",
+			Description: "skill two",
+			Type:        "standard",
+			Content:     "You are skill two.",
+		},
+	})
+
+	registry, ok := engine.ToolRegistry().(*skillRegistry)
+	if !ok {
+		t.Fatalf("tool registry type = %T, want *skillRegistry", engine.ToolRegistry())
+	}
+
+	type runResult struct {
+		result soul.StepResult
+		err    error
+	}
+
+	done := make(chan runResult, 1)
+	go func() {
+		result, err := engine.Run(context.Background(), types.ContentParts{
+			types.TextPart{Text: "start"},
+		})
+		done <- runResult{result: result, err: err}
+	}()
+
+	approvals := waitApprovalRequests(t, wireCh, 2)
+	if err := engine.RespondApproval(approvals[0].ID, soul.ApprovalApprove, ""); err != nil {
+		t.Fatalf("RespondApproval(first) error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for registry.nestedRuns.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("nestedRuns did not become > 0 before second approval")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if err := engine.RespondApproval(approvals[1].ID, soul.ApprovalApprove, ""); err != nil {
+		t.Fatalf("RespondApproval(second) error = %v", err)
+	}
+	close(firstSkillRunGate)
+
+	select {
+	case out := <-done:
+		if out.err != nil {
+			t.Fatalf("Run() error = %v", out.err)
+		}
+		if got := textFromParts(out.result.Content); got != "outer done" {
+			t.Fatalf("result text = %q, want outer done", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() timeout, possible parallel skill call regression")
+	}
+
+	if provider.CallCount() != 4 {
+		t.Fatalf("provider call count = %d, want 4", provider.CallCount())
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 4 {
+		t.Fatalf("len(requests) = %d, want 4", len(requests))
+	}
+
+	outerFollowup := requests[3]
+	toolPayloads := make([]string, 0, 2)
+	for i := range outerFollowup.Messages {
+		if outerFollowup.Messages[i].Role != "tool" {
+			continue
+		}
+		toolPayloads = append(toolPayloads, textFromParts(outerFollowup.Messages[i].Content))
+	}
+	if len(toolPayloads) != 2 {
+		t.Fatalf("outer followup tool payload count = %d, want 2", len(toolPayloads))
+	}
+	for i := range toolPayloads {
+		if toolPayloads[i] != "skill done" {
+			t.Fatalf("tool payload[%d] = %q, want skill done", i, toolPayloads[i])
+		}
+	}
+}
+
+func waitApprovalRequests(t *testing.T, wireCh <-chan wire.WireMessage, want int) []wire.ApprovalRequest {
+	t.Helper()
+	approvals := make([]wire.ApprovalRequest, 0, want)
+	deadline := time.After(2 * time.Second)
+	for len(approvals) < want {
+		select {
+		case msg := <-wireCh:
+			req, ok := msg.(wire.ApprovalRequest)
+			if !ok {
+				continue
+			}
+			approvals = append(approvals, req)
+		case <-deadline:
+			t.Fatalf("approval request count = %d, want %d", len(approvals), want)
+		}
+	}
+	return approvals
+}
+
 type noopTool struct {
 	name string
 }
@@ -266,6 +422,8 @@ type scriptedProvider struct {
 	streams  [][]llm.ChatEvent
 	requests []llm.ChatRequest
 	calls    int
+	// beforeStream runs right before emitting the configured stream for the given call index.
+	beforeStream func(call int)
 }
 
 func (*scriptedProvider) ModelName() string {
@@ -282,16 +440,22 @@ func (*scriptedProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatRe
 
 func (p *scriptedProvider) ChatStream(_ context.Context, req llm.ChatRequest) (<-chan llm.ChatEvent, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.requests = append(p.requests, cloneChatRequest(req))
 
 	if p.calls >= len(p.streams) {
+		p.mu.Unlock()
 		return nil, errors.New("scripted provider: no stream configured for call")
 	}
 
 	streamEvents := p.streams[p.calls]
+	call := p.calls
+	beforeStream := p.beforeStream
 	p.calls++
+	p.mu.Unlock()
+
+	if beforeStream != nil {
+		beforeStream(call)
+	}
 
 	ch := make(chan llm.ChatEvent, len(streamEvents))
 	for i := range streamEvents {

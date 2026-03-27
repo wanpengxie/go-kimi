@@ -16,6 +16,8 @@ import (
 
 const skillToolPrefix = "skill:"
 
+type nestedSkillExecutionContextKey struct{}
+
 var skillParameterSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -98,6 +100,10 @@ func (r *SkillRunner) Execute(ctx context.Context, call types.ToolCall) (types.T
 		ctx = context.Background()
 	}
 
+	if nestedSkillExecutionFromContext(ctx) {
+		return toolError(call, "skill tools not available in nested execution"), nil
+	}
+
 	if r == nil || r.soul == nil || r.skill == nil {
 		return toolError(call, "skill runner is not initialized"), nil
 	}
@@ -123,7 +129,7 @@ func (r *SkillRunner) Execute(ctx context.Context, call types.ToolCall) (types.T
 	}
 	defer disableSkillToolRestore()
 
-	runResult, runErr := r.soul.Run(ctx, types.ContentParts{
+	runResult, runErr := r.soul.Run(markNestedSkillExecution(ctx), types.ContentParts{
 		types.TextPart{Text: input},
 	})
 	if runErr != nil {
@@ -241,9 +247,6 @@ func (r *skillRegistry) Executor(name string) (soul.ToolExecutor, bool) {
 	if r == nil || name == "" {
 		return nil, false
 	}
-	if r.nestedSkillToolDisabled() && strings.HasPrefix(name, skillToolPrefix) {
-		return nil, false
-	}
 
 	r.registerMu.RLock()
 	executor, ok := r.executors[name]
@@ -270,6 +273,21 @@ func (r *skillRegistry) enterNestedSkillToolDisabled() func() {
 
 func (r *skillRegistry) nestedSkillToolDisabled() bool {
 	return r != nil && r.nestedRuns.Load() > 0
+}
+
+func markNestedSkillExecution(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, nestedSkillExecutionContextKey{}, true)
+}
+
+func nestedSkillExecutionFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	nested, _ := ctx.Value(nestedSkillExecutionContextKey{}).(bool)
+	return nested
 }
 
 func skillToolName(name string) string {
