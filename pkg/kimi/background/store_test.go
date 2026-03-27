@@ -1,6 +1,7 @@
 package background
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,6 +192,73 @@ func TestBackgroundTaskStoreValidationAndMissingErrors(t *testing.T) {
 	}
 	if err := store.AppendOutput("missing", []byte("x")); err == nil {
 		t.Fatal("AppendOutput(missing) error = nil, want error")
+	}
+}
+
+func TestBackgroundTaskStoreWriteRequiresExistingTask(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "tasks")
+	store := NewBackgroundTaskStore(root)
+
+	if err := store.WriteRuntime("missing-task", &TaskRuntime{Status: TaskRunning}); err == nil {
+		t.Fatal("WriteRuntime(missing-task, non-nil) error = nil, want error")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("WriteRuntime(missing-task, non-nil) error = %v, want os.ErrNotExist", err)
+	}
+
+	if err := store.WriteControl("missing-task", &TaskControl{KillReason: "manual"}); err == nil {
+		t.Fatal("WriteControl(missing-task, non-nil) error = nil, want error")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("WriteControl(missing-task, non-nil) error = %v, want os.ErrNotExist", err)
+	}
+
+	ghostDir := filepath.Join(root, "missing-task")
+	if _, err := os.Stat(ghostDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ghost dir %q exists unexpectedly (stat err=%v)", ghostDir, err)
+	}
+}
+
+func TestBackgroundTaskStoreReadOutputHardCap(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "tasks")
+	store := NewBackgroundTaskStore(root)
+	if err := store.Create(TaskSpec{
+		ID:      "task-1",
+		Kind:    TaskKindBash,
+		Command: "echo hi",
+	}); err != nil {
+		t.Fatalf("Create(task-1) error = %v", err)
+	}
+
+	payload := strings.Repeat("a", MaxTaskOutputBytes+64)
+	if err := store.AppendOutput("task-1", []byte(payload)); err != nil {
+		t.Fatalf("AppendOutput(task-1) error = %v", err)
+	}
+
+	defaultRead, err := store.ReadOutput("task-1", 0, 0)
+	if err != nil {
+		t.Fatalf("ReadOutput(task-1, 0, 0) error = %v", err)
+	}
+	if len(defaultRead) != MaxTaskOutputBytes {
+		t.Fatalf("len(ReadOutput default) = %d, want %d", len(defaultRead), MaxTaskOutputBytes)
+	}
+
+	oversizedRead, err := store.ReadOutput("task-1", 0, MaxTaskOutputBytes*10)
+	if err != nil {
+		t.Fatalf("ReadOutput(task-1, 0, oversized) error = %v", err)
+	}
+	if len(oversizedRead) != MaxTaskOutputBytes {
+		t.Fatalf("len(ReadOutput oversized) = %d, want %d", len(oversizedRead), MaxTaskOutputBytes)
+	}
+
+	windowRead, err := store.ReadOutput("task-1", 0, 128)
+	if err != nil {
+		t.Fatalf("ReadOutput(task-1, 0, 128) error = %v", err)
+	}
+	if len(windowRead) != 128 {
+		t.Fatalf("len(ReadOutput window) = %d, want 128", len(windowRead))
 	}
 }
 

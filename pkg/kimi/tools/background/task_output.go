@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -15,6 +16,7 @@ const (
 	taskOutputToolDescription = "Read one background task status and output."
 
 	defaultTaskOutputMaxBytes = 16 * 1024
+	maxTaskOutputBytes        = corebg.MaxTaskOutputBytes
 )
 
 var taskOutputSchema = json.RawMessage(`{
@@ -33,6 +35,7 @@ var taskOutputSchema = json.RawMessage(`{
     "max_bytes": {
       "type": "integer",
       "minimum": 0,
+      "maximum": 1048576,
       "default": 16384,
       "description": "Maximum bytes to read from output log"
     }
@@ -127,6 +130,9 @@ func decodeTaskOutputParams(raw json.RawMessage) (taskOutputParams, error) {
 	}
 	if input.MaxBytes < 0 {
 		return taskOutputParams{}, errors.New("task_output: max_bytes must be >= 0")
+	}
+	if input.MaxBytes > maxTaskOutputBytes {
+		return taskOutputParams{}, fmt.Errorf("task_output: max_bytes must be <= %d", maxTaskOutputBytes)
 	}
 	return input, nil
 }

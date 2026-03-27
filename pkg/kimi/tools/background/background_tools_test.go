@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -80,6 +81,9 @@ func TestTaskOutputDecodeValidation(t *testing.T) {
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"task_id":"t","offset":-1}`)); err == nil {
 		t.Fatal("Execute(task_output negative offset) error = nil, want error")
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"task_id":"t","max_bytes":%d}`, corebg.MaxTaskOutputBytes+1))); err == nil {
+		t.Fatal("Execute(task_output oversized max_bytes) error = nil, want error")
 	}
 }
 

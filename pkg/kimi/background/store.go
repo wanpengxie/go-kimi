@@ -16,6 +16,7 @@ const (
 	taskRuntimeFileName = "runtime.json"
 	taskControlFileName = "control.json"
 	taskOutputFileName  = "output.log"
+	MaxTaskOutputBytes  = 1 * 1024 * 1024
 )
 
 // BackgroundTaskStore persists background tasks under one session tasks directory.
@@ -122,8 +123,12 @@ func (s *BackgroundTaskStore) WriteRuntime(taskID string, rt *TaskRuntime) error
 	if rt == nil {
 		return errors.New("background store: runtime is nil")
 	}
+	normalizedTaskID, err := s.ensureTaskExists(taskID)
+	if err != nil {
+		return err
+	}
 
-	path, err := s.taskFilePath(taskID, taskRuntimeFileName)
+	path, err := s.taskFilePath(normalizedTaskID, taskRuntimeFileName)
 	if err != nil {
 		return err
 	}
@@ -162,8 +167,12 @@ func (s *BackgroundTaskStore) WriteControl(taskID string, ctrl *TaskControl) err
 	if ctrl == nil {
 		return errors.New("background store: control is nil")
 	}
+	normalizedTaskID, err := s.ensureTaskExists(taskID)
+	if err != nil {
+		return err
+	}
 
-	path, err := s.taskFilePath(taskID, taskControlFileName)
+	path, err := s.taskFilePath(normalizedTaskID, taskControlFileName)
 	if err != nil {
 		return err
 	}
@@ -263,10 +272,14 @@ func (s *BackgroundTaskStore) ReadOutput(taskID string, offset int64, maxBytes i
 		return nil, fmt.Errorf("background store: seek %q to %d: %w", path, offset, err)
 	}
 
-	reader := io.Reader(file)
-	if maxBytes > 0 {
-		reader = io.LimitReader(file, int64(maxBytes))
+	effectiveMaxBytes := maxBytes
+	switch {
+	case effectiveMaxBytes <= 0:
+		effectiveMaxBytes = MaxTaskOutputBytes
+	case effectiveMaxBytes > MaxTaskOutputBytes:
+		effectiveMaxBytes = MaxTaskOutputBytes
 	}
+	reader := io.LimitReader(file, int64(effectiveMaxBytes))
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("background store: read %q: %w", path, err)
@@ -324,6 +337,24 @@ func (s *BackgroundTaskStore) taskFilePath(taskID, fileName string) (string, err
 		return "", err
 	}
 	return filepath.Join(baseDir, normalizedTaskID, fileName), nil
+}
+
+func (s *BackgroundTaskStore) ensureTaskExists(taskID string) (string, error) {
+	normalizedTaskID, err := normalizeTaskID(taskID)
+	if err != nil {
+		return "", err
+	}
+	specPath, err := s.taskFilePath(normalizedTaskID, taskSpecFileName)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(specPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("background store: task %q not found: %w", normalizedTaskID, os.ErrNotExist)
+		}
+		return "", fmt.Errorf("background store: stat %q: %w", specPath, err)
+	}
+	return normalizedTaskID, nil
 }
 
 func normalizeTaskSpec(spec TaskSpec) (TaskSpec, error) {
@@ -415,10 +446,6 @@ func readJSON(path string, target any) error {
 
 func writeJSONAtomic(path string, value any) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("background store: mkdir %q: %w", dir, err)
-	}
-
 	payload, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return fmt.Errorf("background store: marshal %q: %w", path, err)

@@ -33,10 +33,11 @@ type BackgroundTaskManager struct {
 	store          *BackgroundTaskStore
 	subagentRunner SubagentRunner
 
-	mu     sync.Mutex
-	closed bool
-	tasks  map[string]runningTask
-	wg     sync.WaitGroup
+	mu           sync.Mutex
+	closed       bool
+	tasks        map[string]runningTask
+	wg           sync.WaitGroup
+	runtimeLocks sync.Map // map[taskID]*sync.Mutex, serializes runtime/control mutations per task.
 }
 
 type runningTask struct {
@@ -186,42 +187,44 @@ func (m *BackgroundTaskManager) KillTask(taskID string, reason string) error {
 		return err
 	}
 
-	control, err := m.store.ReadControl(normalizedTaskID)
-	if err != nil {
-		return err
-	}
-	now := nowUnixSeconds()
-	control.KillRequestedAt = ptrFloat64(now)
-	control.KillReason = strings.TrimSpace(reason)
-	if control.KillReason == "" {
-		control.KillReason = "killed by request"
-	}
-	if err := m.store.WriteControl(normalizedTaskID, control); err != nil {
-		return err
-	}
+	return m.withTaskMutationLock(normalizedTaskID, func() error {
+		control, err := m.store.ReadControl(normalizedTaskID)
+		if err != nil {
+			return err
+		}
+		now := nowUnixSeconds()
+		control.KillRequestedAt = ptrFloat64(now)
+		control.KillReason = strings.TrimSpace(reason)
+		if control.KillReason == "" {
+			control.KillReason = "killed by request"
+		}
+		if err := m.store.WriteControl(normalizedTaskID, control); err != nil {
+			return err
+		}
 
-	task, running := m.getRunningTask(normalizedTaskID)
-	if running && task.cancel != nil {
-		task.cancel()
+		task, running := m.getRunningTask(normalizedTaskID)
+		if running && task.cancel != nil {
+			task.cancel()
+			return nil
+		}
+
+		rt, err := m.store.ReadRuntime(normalizedTaskID)
+		if err != nil {
+			return err
+		}
+		if rt.Status.IsTerminal() {
+			return nil
+		}
+
+		rt.Status = TaskKilled
+		rt.HeartbeatAt = ptrFloat64(now)
+		rt.FinishedAt = ptrFloat64(now)
+		rt.FailureReason = control.KillReason
+		if err := m.store.WriteRuntime(normalizedTaskID, rt); err != nil {
+			return err
+		}
 		return nil
-	}
-
-	rt, err := m.store.ReadRuntime(normalizedTaskID)
-	if err != nil {
-		return err
-	}
-	if rt.Status.IsTerminal() {
-		return nil
-	}
-
-	rt.Status = TaskKilled
-	rt.HeartbeatAt = ptrFloat64(now)
-	rt.FinishedAt = ptrFloat64(now)
-	rt.FailureReason = control.KillReason
-	if err := m.store.WriteRuntime(normalizedTaskID, rt); err != nil {
-		return err
-	}
-	return nil
+	})
 }
 
 // Shutdown cancels all running tasks and waits until they exit.
@@ -433,12 +436,26 @@ func (m *BackgroundTaskManager) killSnapshot(taskID string) (bool, string) {
 }
 
 func (m *BackgroundTaskManager) updateRuntime(taskID string, mutate func(rt *TaskRuntime)) error {
-	rt, err := m.store.ReadRuntime(taskID)
-	if err != nil {
-		return err
-	}
-	mutate(rt)
-	return m.store.WriteRuntime(taskID, rt)
+	return m.withTaskMutationLock(taskID, func() error {
+		rt, err := m.store.ReadRuntime(taskID)
+		if err != nil {
+			return err
+		}
+		mutate(rt)
+		return m.store.WriteRuntime(taskID, rt)
+	})
+}
+
+func (m *BackgroundTaskManager) withTaskMutationLock(taskID string, do func() error) error {
+	taskLock := m.taskMutationLock(taskID)
+	taskLock.Lock()
+	defer taskLock.Unlock()
+	return do()
+}
+
+func (m *BackgroundTaskManager) taskMutationLock(taskID string) *sync.Mutex {
+	lock, _ := m.runtimeLocks.LoadOrStore(taskID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 type runtimeFinalState struct {

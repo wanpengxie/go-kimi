@@ -2,6 +2,7 @@ package background
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -111,6 +112,34 @@ func TestBackgroundTaskManagerKillBashTask(t *testing.T) {
 	}
 	if view.Control.KillReason != "manual stop" {
 		t.Fatalf("control.kill_reason = %q, want %q", view.Control.KillReason, "manual stop")
+	}
+}
+
+func TestBackgroundTaskManagerKillBashTaskImmediate(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := newManagerForTest(t, nil)
+	for i := 0; i < 5; i++ {
+		taskID, err := manager.CreateBashTask(context.Background(), TaskSpec{
+			Command:    "sleep 10",
+			TimeoutSec: 0,
+		})
+		if err != nil {
+			t.Fatalf("CreateBashTask(immediate kill, run=%d) error = %v", i, err)
+		}
+
+		reason := fmt.Sprintf("immediate stop %d", i)
+		if err := manager.KillTask(taskID, reason); err != nil {
+			t.Fatalf("KillTask(immediate, run=%d) error = %v", i, err)
+		}
+
+		view := waitForTerminalTask(t, manager, taskID, 5*time.Second)
+		if view.Runtime.Status != TaskKilled {
+			t.Fatalf("task status(run=%d) = %q, want %q", i, view.Runtime.Status, TaskKilled)
+		}
+		if view.Control.KillReason != reason {
+			t.Fatalf("control.kill_reason(run=%d) = %q, want %q", i, view.Control.KillReason, reason)
+		}
 	}
 }
 
