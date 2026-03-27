@@ -12,7 +12,7 @@ GOENV := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH)
 GOIMPORTS := $(GOENV) $(GO) run golang.org/x/tools/cmd/goimports@v0.30.0
 GOLANGCI_LINT := $(GOENV) $(GO) run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.63.0
 
-.PHONY: prepare-cache build test test-e2e lint fmt ci
+.PHONY: prepare-cache build test test-coverage test-e2e test-e2e-live lint fmt ci
 
 prepare-cache:
 	mkdir -p $(GOCACHE) $(GOMODCACHE) $(GOPATH) $(GOLANGCI_LINT_CACHE)
@@ -23,8 +23,20 @@ build: prepare-cache
 test: prepare-cache
 	$(GOENV) $(GO) test $(PKGS)
 
+test-coverage: prepare-cache
+	$(GOENV) $(GO) test -coverprofile=coverage.out -coverpkg=./... $(PKGS)
+	$(GOENV) $(GO) tool cover -func=coverage.out | tail -n 1
+
 test-e2e: prepare-cache
 	$(GOENV) $(GO) test -tags=e2e $(E2E_PKGS)
+
+test-e2e-live: prepare-cache
+	@if [[ -z "$${KIMI_API_KEY:-}" ]]; then \
+		echo "KIMI_API_KEY is not set, skipping live e2e tests."; \
+		exit 0; \
+	else \
+		$(GOENV) $(GO) test -tags=e2e_live $(E2E_PKGS); \
+	fi
 
 lint: prepare-cache
 	GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE) $(GOLANGCI_LINT) run $(PKGS)
