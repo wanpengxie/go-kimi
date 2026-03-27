@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -177,10 +178,77 @@ func TestResolvePathRejectsAbsoluteEscape(t *testing.T) {
 	}
 }
 
+func TestResolvePathRejectsSymlinkFileEscape(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink tests require elevated privileges on windows")
+	}
+
+	workDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	linkPath := filepath.Join(workDir, "escape.txt")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Fatalf("os.Symlink() error = %v", err)
+	}
+
+	_, err := resolvePath(workDir, "escape.txt")
+	if err == nil {
+		t.Fatal("resolvePath() error = nil, want symlink escape rejection")
+	}
+}
+
+func TestResolvePathRejectsSymlinkParentEscape(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink tests require elevated privileges on windows")
+	}
+
+	workDir := t.TempDir()
+	outsideDir := t.TempDir()
+	parentLink := filepath.Join(workDir, "linked-dir")
+	if err := os.Symlink(outsideDir, parentLink); err != nil {
+		t.Fatalf("os.Symlink() error = %v", err)
+	}
+
+	_, err := resolvePath(workDir, filepath.Join("linked-dir", "new.txt"))
+	if err == nil {
+		t.Fatal("resolvePath() error = nil, want symlink parent escape rejection")
+	}
+}
+
 func TestResolvePathAllowsPathInsideWorkDir(t *testing.T) {
 	t.Parallel()
 
 	workDir := t.TempDir()
+	got, err := resolvePath(workDir, "sub/ok.txt")
+	if err != nil {
+		t.Fatalf("resolvePath() error = %v", err)
+	}
+
+	want := filepath.Join(workDir, "sub", "ok.txt")
+	if got != filepath.Clean(want) {
+		t.Fatalf("resolvePath() = %q, want %q", got, filepath.Clean(want))
+	}
+}
+
+func TestResolvePathAllowsExistingFileInsideWorkDir(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "sub"), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "sub", "ok.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
 	got, err := resolvePath(workDir, "sub/ok.txt")
 	if err != nil {
 		t.Fatalf("resolvePath() error = %v", err)

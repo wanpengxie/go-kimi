@@ -68,10 +68,57 @@ func resolvePath(workDir, path string) (string, error) {
 		return "", fmt.Errorf("file tool: resolve abs path: %w", err)
 	}
 
-	if absResolved != absWorkDir && !strings.HasPrefix(absResolved, absWorkDir+string(os.PathSeparator)) {
+	evalWorkDir, err := evalPathWithExistingParent(absWorkDir)
+	if err != nil {
+		return "", fmt.Errorf("file tool: eval workdir symlinks: %w", err)
+	}
+
+	evalResolved, err := evalPathWithExistingParent(absResolved)
+	if err != nil {
+		return "", fmt.Errorf("file tool: eval path symlinks: %w", err)
+	}
+
+	if evalResolved != evalWorkDir && !strings.HasPrefix(evalResolved, evalWorkDir+string(os.PathSeparator)) {
 		return "", fmt.Errorf("file tool: path %q escapes workdir", path)
 	}
 	return absResolved, nil
+}
+
+// evalPathWithExistingParent resolves symlinks on the longest existing parent
+// so paths that don't exist yet can still be validated against the sandbox.
+func evalPathWithExistingParent(path string) (string, error) {
+	path = filepath.Clean(path)
+	evaluated, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return filepath.Clean(evaluated), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	missing := make([]string, 0, 4)
+	probe := path
+	for {
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", err
+		}
+
+		missing = append(missing, filepath.Base(probe))
+		probe = parent
+
+		evaluated, evalErr := filepath.EvalSymlinks(probe)
+		if evalErr == nil {
+			rebuilt := filepath.Clean(evaluated)
+			for i := len(missing) - 1; i >= 0; i-- {
+				rebuilt = filepath.Join(rebuilt, missing[i])
+			}
+			return rebuilt, nil
+		}
+		if !os.IsNotExist(evalErr) {
+			return "", evalErr
+		}
+	}
 }
 
 func relativePath(workDir, target string) string {
