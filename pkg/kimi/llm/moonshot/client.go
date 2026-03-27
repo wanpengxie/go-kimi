@@ -20,7 +20,8 @@ import (
 )
 
 const (
-	defaultBaseURL        = "https://api.moonshot.ai/v1"
+	defaultBaseURL        = "https://api.moonshot.cn/v1"
+	defaultModel          = "kimi-k2.5"
 	defaultRequestPath    = "/chat/completions"
 	defaultRequestTO      = 120 * time.Second
 	defaultInitialBackoff = 300 * time.Millisecond
@@ -47,11 +48,15 @@ func NewMoonshotClient(apiKey, baseURL, model string) *MoonshotClient {
 	if normalizedBaseURL == "" {
 		normalizedBaseURL = defaultBaseURL
 	}
+	normalizedModel := strings.TrimSpace(model)
+	if normalizedModel == "" {
+		normalizedModel = defaultModel
+	}
 
 	return &MoonshotClient{
 		apiKey:         strings.TrimSpace(apiKey),
 		baseURL:        normalizedBaseURL,
-		model:          strings.TrimSpace(model),
+		model:          normalizedModel,
 		httpClient:     &http.Client{Timeout: defaultRequestTO},
 		maxAttempts:    defaultMaxAttempts,
 		initialBackoff: defaultInitialBackoff,
