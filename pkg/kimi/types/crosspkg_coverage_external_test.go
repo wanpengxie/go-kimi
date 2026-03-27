@@ -103,11 +103,22 @@ func TestCrossPackageCoverageScenarioFromTypes(t *testing.T) {
 
 	messages := []wire.WireMessage{
 		wire.TurnBegin{TurnID: "turn-1", Input: parts[:2]},
+		wire.TextDelta{TurnID: "turn-1", Delta: "partial"},
 		wire.ToolCallRequest{
 			ID: "req-1",
 			ToolCall: types.ToolCall{
 				ID:   "call-1",
 				Name: "search",
+			},
+		},
+		wire.ToolCallResult{
+			ID: "req-1",
+			Result: types.ToolResult{
+				ToolCallID: "call-1",
+				Name:       "search",
+				Value: types.ToolReturnValue{
+					Value: map[string]any{"ok": true},
+				},
 			},
 		},
 		wire.Notification{

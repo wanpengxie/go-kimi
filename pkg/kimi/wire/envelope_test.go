@@ -11,6 +11,7 @@ import (
 
 var (
 	_ Event       = TurnBegin{}
+	_ Event       = TextDelta{}
 	_ Event       = SteerInput{}
 	_ Event       = TurnEnd{}
 	_ Event       = StepBegin{}
@@ -25,6 +26,7 @@ var (
 	_ Request     = ApprovalRequest{}
 	_ Request     = ApprovalResponse{}
 	_ Request     = ToolCallRequest{}
+	_ Event       = ToolCallResult{}
 	_ Request     = QuestionRequest{}
 	_ Request     = QuestionResponse{}
 	_ Request     = QuestionOption{}
@@ -66,6 +68,14 @@ func TestSerializeDeserializeWireMessageRoundTripAllTypes(t *testing.T) {
 			wantType: WireMessageTypeTurnBegin,
 		},
 		{
+			name: "text_delta",
+			message: TextDelta{
+				TurnID: "turn-1",
+				Delta:  "hel",
+			},
+			wantType: WireMessageTypeTextDelta,
+		},
+		{
 			name: "steer_input",
 			message: SteerInput{
 				Text:     "focus on tests",
@@ -76,7 +86,8 @@ func TestSerializeDeserializeWireMessageRoundTripAllTypes(t *testing.T) {
 		{
 			name: "turn_end",
 			message: TurnEnd{
-				TurnID: "turn-1",
+				TurnID:     "turn-1",
+				StopReason: "stop",
 				Output: types.ContentParts{
 					types.TextPart{Text: "done"},
 				},
@@ -205,6 +216,22 @@ func TestSerializeDeserializeWireMessageRoundTripAllTypes(t *testing.T) {
 				},
 			},
 			wantType: WireMessageTypeToolCallRequest,
+		},
+		{
+			name: "tool_call_result",
+			message: ToolCallResult{
+				ID: "tool-req-1",
+				Result: types.ToolResult{
+					ToolCallID: "call-1",
+					Name:       "search",
+					Value: types.ToolReturnValue{
+						Value: map[string]any{
+							"items": []any{"a", "b"},
+						},
+					},
+				},
+			},
+			wantType: WireMessageTypeToolCallResult,
 		},
 		{
 			name: "question_request",
@@ -336,6 +363,7 @@ func TestWireMessageRegistryCompleteness(t *testing.T) {
 
 	expected := []WireMessageType{
 		WireMessageTypeTurnBegin,
+		WireMessageTypeTextDelta,
 		WireMessageTypeSteerInput,
 		WireMessageTypeTurnEnd,
 		WireMessageTypeStepBegin,
@@ -350,6 +378,7 @@ func TestWireMessageRegistryCompleteness(t *testing.T) {
 		WireMessageTypeApprovalRequest,
 		WireMessageTypeApprovalResponse,
 		WireMessageTypeToolCallRequest,
+		WireMessageTypeToolCallResult,
 		WireMessageTypeQuestionRequest,
 		WireMessageTypeQuestionResponse,
 		WireMessageTypeQuestionOption,

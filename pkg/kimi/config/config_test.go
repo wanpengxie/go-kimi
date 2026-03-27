@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
@@ -355,9 +354,6 @@ func TestCrossPackageCoverageScenarioFromConfig(t *testing.T) {
 	if kimi.Version == "" {
 		t.Fatal("kimi.Version must not be empty")
 	}
-	if soul.EngineName == "" {
-		t.Fatal("soul.EngineName must not be empty")
-	}
 
 	cfg := NewDefaultConfig()
 	if err := cfg.Validate(); err != nil {
@@ -462,13 +458,18 @@ func TestCrossPackageCoverageScenarioFromConfig(t *testing.T) {
 			TurnID: "turn-1",
 			Input:  parts,
 		},
+		wire.TextDelta{
+			TurnID: "turn-1",
+			Delta:  "partial",
+		},
 		wire.SteerInput{
 			Text:     "focus",
 			Priority: "high",
 		},
 		wire.TurnEnd{
-			TurnID: "turn-1",
-			Output: parts[:1],
+			TurnID:     "turn-1",
+			StopReason: "stop",
+			Output:     parts[:1],
 			Usage: &types.TokenUsage{
 				InputTokens:  1,
 				OutputTokens: 2,
@@ -523,6 +524,18 @@ func TestCrossPackageCoverageScenarioFromConfig(t *testing.T) {
 				Name: "search",
 				Arguments: map[string]any{
 					"q": "x",
+				},
+			},
+		},
+		wire.ToolCallResult{
+			ID: "tool-req-1",
+			Result: types.ToolResult{
+				ToolCallID: "call-1",
+				Name:       "search",
+				Value: types.ToolReturnValue{
+					Value: map[string]any{
+						"ok": true,
+					},
 				},
 			},
 		},

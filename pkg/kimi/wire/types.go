@@ -7,6 +7,7 @@ type WireMessageType string
 
 const (
 	WireMessageTypeTurnBegin       WireMessageType = "turn_begin"
+	WireMessageTypeTextDelta       WireMessageType = "text_delta"
 	WireMessageTypeSteerInput      WireMessageType = "steer_input"
 	WireMessageTypeTurnEnd         WireMessageType = "turn_end"
 	WireMessageTypeStepBegin       WireMessageType = "step_begin"
@@ -22,6 +23,7 @@ const (
 	WireMessageTypeApprovalRequest  WireMessageType = "approval_request"
 	WireMessageTypeApprovalResponse WireMessageType = "approval_response"
 	WireMessageTypeToolCallRequest  WireMessageType = "tool_call_request"
+	WireMessageTypeToolCallResult   WireMessageType = "tool_call_result"
 	WireMessageTypeQuestionRequest  WireMessageType = "question_request"
 	WireMessageTypeQuestionResponse WireMessageType = "question_response"
 	WireMessageTypeQuestionOption   WireMessageType = "question_option"
@@ -70,6 +72,18 @@ func (TurnBegin) wireMessageType() WireMessageType {
 	return WireMessageTypeTurnBegin
 }
 
+// TextDelta carries one streamed text increment for a turn.
+type TextDelta struct {
+	TurnID string `json:"turn_id,omitempty"`
+	Delta  string `json:"delta"`
+}
+
+func (TextDelta) IsEvent() {}
+
+func (TextDelta) wireMessageType() WireMessageType {
+	return WireMessageTypeTextDelta
+}
+
 // SteerInput carries steering input for an in-progress turn.
 type SteerInput struct {
 	Text     string `json:"text"`
@@ -85,6 +99,7 @@ func (SteerInput) wireMessageType() WireMessageType {
 // TurnEnd marks the end of a turn.
 type TurnEnd struct {
 	TurnID      string             `json:"turn_id,omitempty"`
+	StopReason  string             `json:"stop_reason,omitempty"`
 	Output      types.ContentParts `json:"output,omitempty"`
 	Usage       *types.TokenUsage  `json:"usage,omitempty"`
 	Interrupted bool               `json:"interrupted,omitempty"`
@@ -246,6 +261,18 @@ func (ToolCallRequest) IsRequest() {}
 
 func (ToolCallRequest) wireMessageType() WireMessageType {
 	return WireMessageTypeToolCallRequest
+}
+
+// ToolCallResult reports one tool execution result.
+type ToolCallResult struct {
+	ID     string           `json:"id,omitempty"`
+	Result types.ToolResult `json:"result"`
+}
+
+func (ToolCallResult) IsEvent() {}
+
+func (ToolCallResult) wireMessageType() WireMessageType {
+	return WireMessageTypeToolCallResult
 }
 
 // QuestionRequest asks a structured question that expects user answers.

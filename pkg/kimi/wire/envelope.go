@@ -17,6 +17,7 @@ type wireMessageDecoder func(payload json.RawMessage) (WireMessage, error)
 
 var wireMessageDecoders = map[WireMessageType]wireMessageDecoder{
 	WireMessageTypeTurnBegin:       decodeWireMessage[TurnBegin],
+	WireMessageTypeTextDelta:       decodeWireMessage[TextDelta],
 	WireMessageTypeSteerInput:      decodeWireMessage[SteerInput],
 	WireMessageTypeTurnEnd:         decodeWireMessage[TurnEnd],
 	WireMessageTypeStepBegin:       decodeWireMessage[StepBegin],
@@ -32,6 +33,7 @@ var wireMessageDecoders = map[WireMessageType]wireMessageDecoder{
 	WireMessageTypeApprovalRequest:  decodeWireMessage[ApprovalRequest],
 	WireMessageTypeApprovalResponse: decodeWireMessage[ApprovalResponse],
 	WireMessageTypeToolCallRequest:  decodeWireMessage[ToolCallRequest],
+	WireMessageTypeToolCallResult:   decodeWireMessage[ToolCallResult],
 	WireMessageTypeQuestionRequest:  decodeWireMessage[QuestionRequest],
 	WireMessageTypeQuestionResponse: decodeWireMessage[QuestionResponse],
 	WireMessageTypeQuestionOption:   decodeWireMessage[QuestionOption],

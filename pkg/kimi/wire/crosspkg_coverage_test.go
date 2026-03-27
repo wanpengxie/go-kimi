@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
@@ -19,9 +18,6 @@ func TestCrossPackageCoverageScenarioFromWire(t *testing.T) {
 
 	if kimi.Version == "" {
 		t.Fatal("kimi.Version must not be empty")
-	}
-	if soul.EngineName == "" {
-		t.Fatal("soul.EngineName must not be empty")
 	}
 
 	cfg := config.NewDefaultConfig()
@@ -219,6 +215,7 @@ func TestWireMarkerMethodsAreCallable(t *testing.T) {
 
 	events := []Event{
 		TurnBegin{},
+		TextDelta{},
 		SteerInput{},
 		TurnEnd{},
 		StepBegin{},
@@ -230,6 +227,7 @@ func TestWireMarkerMethodsAreCallable(t *testing.T) {
 		StatusUpdate{},
 		Notification{},
 		SubagentEvent{},
+		ToolCallResult{},
 	}
 	for i := range events {
 		events[i].IsEvent()
