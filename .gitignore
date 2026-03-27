@@ -1,3 +1,5 @@
 .cache/
 .dalek/
 .env.local
+third_party
+coverage.out
