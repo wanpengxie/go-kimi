@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"testing"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
@@ -19,6 +20,16 @@ func (s stubProvider) ModelName() string {
 func (s stubProvider) WithThinking(effort string) ChatProvider {
 	s.effort = effort
 	return s
+}
+
+func (s stubProvider) Chat(_ context.Context, _ ChatRequest) (*ChatResponse, error) {
+	return &ChatResponse{}, nil
+}
+
+func (s stubProvider) ChatStream(_ context.Context, _ ChatRequest) (<-chan ChatEvent, error) {
+	ch := make(chan ChatEvent)
+	close(ch)
+	return ch, nil
 }
 
 var _ ChatProvider = stubProvider{}
