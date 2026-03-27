@@ -76,6 +76,18 @@ func (c *MoonshotClient) ModelName() string {
 	return c.model
 }
 
+// WithModel returns a cloned provider with updated model identifier.
+func (c *MoonshotClient) WithModel(model string) llm.ChatProvider {
+	if c == nil {
+		return c
+	}
+	cloned := *c
+	if normalized := strings.TrimSpace(model); normalized != "" {
+		cloned.model = normalized
+	}
+	return &cloned
+}
+
 // WithThinking returns a cloned provider with updated thinking effort.
 func (c *MoonshotClient) WithThinking(effort string) llm.ChatProvider {
 	if c == nil {

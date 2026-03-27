@@ -48,6 +48,25 @@ func TestNewMoonshotClientDefaultsAndFromConfig(t *testing.T) {
 	}
 }
 
+func TestMoonshotClientWithModelClonesProvider(t *testing.T) {
+	t.Parallel()
+
+	client := NewMoonshotClient("test-key", "https://example.com/v1", "kimi-k2")
+	overridden, ok := client.WithModel(" kimi-k2.5 ").(*MoonshotClient)
+	if !ok {
+		t.Fatal("WithModel() should return *MoonshotClient")
+	}
+	if overridden == client {
+		t.Fatal("WithModel() returned same pointer, want clone")
+	}
+	if overridden.model != "kimi-k2.5" {
+		t.Fatalf("overridden model = %q, want %q", overridden.model, "kimi-k2.5")
+	}
+	if client.model != "kimi-k2" {
+		t.Fatalf("original model = %q, want %q", client.model, "kimi-k2")
+	}
+}
+
 func TestMoonshotClientChat(t *testing.T) {
 	t.Parallel()
 

@@ -336,10 +336,12 @@ func (m *BackgroundTaskManager) runAgentTask(baseCtx context.Context, spec TaskS
 	})
 
 	result, runErr := m.subagentRunner.Run(runCtx, subagents.ForegroundRunRequest{
-		AgentID:       spec.AgentID,
-		SubagentType:  spec.SubagentType,
-		Prompt:        spec.Prompt,
-		ModelOverride: spec.ModelOverride,
+		AgentID:          spec.AgentID,
+		SubagentType:     spec.SubagentType,
+		Prompt:           spec.Prompt,
+		ModelOverride:    spec.ModelOverride,
+		Background:       true,
+		BackgroundTaskID: spec.ID,
 	})
 	if output := extractAgentOutput(result); output != "" {
 		if appendErr := m.store.AppendOutput(spec.ID, []byte(output+"\n")); appendErr != nil && runErr == nil {

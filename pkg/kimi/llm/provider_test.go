@@ -11,6 +11,10 @@ func (fakeChatProvider) ModelName() string {
 	return "kimi-k2"
 }
 
+func (fakeChatProvider) WithModel(_ string) ChatProvider {
+	return fakeChatProvider{}
+}
+
 func (fakeChatProvider) WithThinking(_ string) ChatProvider {
 	return fakeChatProvider{}
 }
@@ -36,5 +40,8 @@ func TestChatProviderContract(t *testing.T) {
 	}
 	if provider.WithThinking("high") == nil {
 		t.Fatal("WithThinking() returned nil provider")
+	}
+	if provider.WithModel("kimi-k2.5") == nil {
+		t.Fatal("WithModel() returned nil provider")
 	}
 }

@@ -17,6 +17,11 @@ func (s stubProvider) ModelName() string {
 	return s.modelName
 }
 
+func (s stubProvider) WithModel(model string) ChatProvider {
+	s.modelName = model
+	return s
+}
+
 func (s stubProvider) WithThinking(effort string) ChatProvider {
 	s.effort = effort
 	return s

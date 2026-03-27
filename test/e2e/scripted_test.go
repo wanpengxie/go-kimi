@@ -329,6 +329,10 @@ func (p *scriptedChatProvider) ModelName() string {
 	return "scripted"
 }
 
+func (p *scriptedChatProvider) WithModel(_ string) llm.ChatProvider {
+	return p
+}
+
 func (p *scriptedChatProvider) WithThinking(_ string) llm.ChatProvider {
 	return p
 }

@@ -161,6 +161,12 @@ func TestBackgroundTaskManagerCreateAgentTask(t *testing.T) {
 	if calls[0].Prompt != "Plan work" {
 		t.Fatalf("runner prompt = %q, want %q", calls[0].Prompt, "Plan work")
 	}
+	if !calls[0].Background {
+		t.Fatal("runner background = false, want true")
+	}
+	if calls[0].BackgroundTaskID != taskID {
+		t.Fatalf("runner background_task_id = %q, want %q", calls[0].BackgroundTaskID, taskID)
+	}
 }
 
 func TestBackgroundTaskManagerShutdownAndValidation(t *testing.T) {

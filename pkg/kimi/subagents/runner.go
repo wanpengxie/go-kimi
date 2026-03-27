@@ -20,10 +20,12 @@ var foregroundAgentSequence uint64
 
 // ForegroundRunRequest defines one synchronous subagent run request.
 type ForegroundRunRequest struct {
-	AgentID       string
-	SubagentType  string
-	Prompt        string
-	ModelOverride string
+	AgentID          string
+	SubagentType     string
+	Prompt           string
+	ModelOverride    string
+	Background       bool
+	BackgroundTaskID string
 }
 
 // RunnerDeps defines required dependencies for ForegroundSubagentRunner.
@@ -86,10 +88,12 @@ func (r *ForegroundSubagentRunner) validateDeps() error {
 
 func normalizeRunRequest(req ForegroundRunRequest) (ForegroundRunRequest, error) {
 	normalized := ForegroundRunRequest{
-		AgentID:       strings.TrimSpace(req.AgentID),
-		SubagentType:  strings.TrimSpace(req.SubagentType),
-		Prompt:        strings.TrimSpace(req.Prompt),
-		ModelOverride: strings.TrimSpace(req.ModelOverride),
+		AgentID:          strings.TrimSpace(req.AgentID),
+		SubagentType:     strings.TrimSpace(req.SubagentType),
+		Prompt:           strings.TrimSpace(req.Prompt),
+		ModelOverride:    strings.TrimSpace(req.ModelOverride),
+		Background:       req.Background,
+		BackgroundTaskID: strings.TrimSpace(req.BackgroundTaskID),
 	}
 	if normalized.Prompt == "" {
 		return ForegroundRunRequest{}, errors.New("subagents: prompt is required")
@@ -113,10 +117,11 @@ func (r *ForegroundSubagentRunner) runNew(ctx context.Context, req ForegroundRun
 	record := &AgentInstanceRecord{
 		AgentID:      newForegroundAgentID(),
 		SubagentType: def.Name,
-		Status:       StatusRunningForeground,
+		Status:       runningStatusFor(req.Background),
 		Description:  req.Prompt,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+		LastTaskID:   req.BackgroundTaskID,
 		LaunchSpec: AgentLaunchSpec{
 			ModelOverride:  req.ModelOverride,
 			EffectiveModel: effectiveModel,
@@ -154,6 +159,13 @@ func (r *ForegroundSubagentRunner) runExisting(ctx context.Context, req Foregrou
 			record.SubagentType,
 		)
 	}
+	if record.Status == StatusRunningForeground || record.Status == StatusRunningBackground {
+		return types.ToolReturnValue{}, fmt.Errorf(
+			"subagents: agent %q is already running (%s)",
+			record.AgentID,
+			record.Status,
+		)
+	}
 
 	def, err := r.deps.Market.Require(record.SubagentType)
 	if err != nil {
@@ -161,9 +173,12 @@ func (r *ForegroundSubagentRunner) runExisting(ctx context.Context, req Foregrou
 	}
 
 	now := nowUnixSeconds()
-	record.Status = StatusRunningForeground
+	record.Status = runningStatusFor(req.Background)
 	record.Description = req.Prompt
 	record.UpdatedAt = now
+	if req.BackgroundTaskID != "" {
+		record.LastTaskID = req.BackgroundTaskID
+	}
 	if record.LaunchSpec.AgentID == "" {
 		record.LaunchSpec.AgentID = record.AgentID
 	}
@@ -197,7 +212,7 @@ func (r *ForegroundSubagentRunner) runWithRecord(
 	record *AgentInstanceRecord,
 ) (types.ToolReturnValue, error) {
 	runResult, runErr := r.executeSoulRun(ctx, req, def, record)
-	finalStatus := StatusIdle
+	finalStatus := StatusCompleted
 	if runErr != nil {
 		finalStatus = StatusFailed
 	}
@@ -229,7 +244,7 @@ func (r *ForegroundSubagentRunner) executeSoulRun(
 	}
 
 	engine, err := Build(def, BuildConfig{
-		Provider:       r.deps.Provider,
+		Provider:       r.deps.Provider.WithModel(record.LaunchSpec.EffectiveModel),
 		SystemPrompt:   r.deps.SystemPrompt,
 		WorkDir:        r.deps.WorkDir,
 		ToolPolicy:     def.ToolPolicy,
@@ -312,6 +327,13 @@ func resolveEffectiveModel(modelOverride, defaultModel, providerModel string) st
 		return model
 	}
 	return strings.TrimSpace(providerModel)
+}
+
+func runningStatusFor(background bool) SubagentStatus {
+	if background {
+		return StatusRunningBackground
+	}
+	return StatusRunningForeground
 }
 
 func nowUnixSeconds() float64 {
