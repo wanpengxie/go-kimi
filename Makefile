@@ -31,12 +31,17 @@ test-e2e: prepare-cache
 	$(GOENV) $(GO) test -tags=e2e $(E2E_PKGS)
 
 test-e2e-live: prepare-cache
-	@if [[ -z "$${KIMI_API_KEY:-}" ]]; then \
+	@set -e; \
+	if [[ -f .env.local ]]; then \
+		set -a; \
+		source .env.local; \
+		set +a; \
+	fi; \
+	if [[ -z "$${KIMI_API_KEY:-}" ]]; then \
 		echo "KIMI_API_KEY is not set, skipping live e2e tests."; \
 		exit 0; \
-	else \
-		$(GOENV) $(GO) test -tags=e2e_live $(E2E_PKGS); \
-	fi
+	fi; \
+	$(GOENV) $(GO) test -tags=e2e_live $(E2E_PKGS)
 
 lint: prepare-cache
 	GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE) $(GOLANGCI_LINT) run $(PKGS)
