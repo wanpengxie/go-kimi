@@ -154,6 +154,44 @@ func TestWriteFileExecuteApprovalRejected(t *testing.T) {
 	}
 }
 
+func TestResolvePathRejectsRelativeEscape(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	_, err := resolvePath(workDir, "../../../etc/passwd")
+	if err == nil {
+		t.Fatal("resolvePath() error = nil, want escape rejection")
+	}
+}
+
+func TestResolvePathRejectsAbsoluteEscape(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsidePath := filepath.Join(outsideDir, "outside.txt")
+
+	_, err := resolvePath(workDir, outsidePath)
+	if err == nil {
+		t.Fatal("resolvePath() error = nil, want absolute escape rejection")
+	}
+}
+
+func TestResolvePathAllowsPathInsideWorkDir(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	got, err := resolvePath(workDir, "sub/ok.txt")
+	if err != nil {
+		t.Fatalf("resolvePath() error = %v", err)
+	}
+
+	want := filepath.Join(workDir, "sub", "ok.txt")
+	if got != filepath.Clean(want) {
+		t.Fatalf("resolvePath() = %q, want %q", got, filepath.Clean(want))
+	}
+}
+
 func TestGlobExecuteRespectsLimitAndRelativePaths(t *testing.T) {
 	t.Parallel()
 
@@ -189,6 +227,18 @@ func TestGlobExecuteInvalidPatternReturnsError(t *testing.T) {
 	}))
 	if err == nil {
 		t.Fatal("Execute() error = nil, want invalid pattern error")
+	}
+}
+
+func TestGlobExecuteRejectsEscapedPattern(t *testing.T) {
+	t.Parallel()
+
+	tool := NewGlob(t.TempDir())
+	_, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"pattern": "../../**",
+	}))
+	if err == nil {
+		t.Fatal("Execute() error = nil, want escape rejection error")
 	}
 }
 

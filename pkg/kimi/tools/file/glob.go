@@ -78,11 +78,10 @@ func (t *Glob) Execute(_ context.Context, params json.RawMessage) (types.ToolRes
 		return types.ToolResult{}, err
 	}
 
-	pattern := strings.TrimSpace(input.Pattern)
-	if !filepath.IsAbs(pattern) {
-		pattern = filepath.Join(workDir, pattern)
+	pattern, err := resolvePath(workDir, input.Pattern)
+	if err != nil {
+		return types.ToolResult{}, err
 	}
-	pattern = filepath.Clean(pattern)
 
 	matches, err := filepath.Glob(pattern)
 	if err != nil {

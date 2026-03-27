@@ -30,14 +30,19 @@ func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 
 func resolveWorkDir(workDir string) (string, error) {
 	workDir = strings.TrimSpace(workDir)
-	if workDir != "" {
-		return workDir, nil
+	if workDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("file tool: resolve workdir: %w", err)
+		}
+		workDir = cwd
 	}
-	cwd, err := os.Getwd()
+
+	absWorkDir, err := filepath.Abs(workDir)
 	if err != nil {
-		return "", fmt.Errorf("file tool: resolve workdir: %w", err)
+		return "", fmt.Errorf("file tool: resolve abs workdir: %w", err)
 	}
-	return cwd, nil
+	return filepath.Clean(absWorkDir), nil
 }
 
 func resolvePath(workDir, path string) (string, error) {
@@ -45,10 +50,28 @@ func resolvePath(workDir, path string) (string, error) {
 	if path == "" {
 		return "", errors.New("file tool: path is required")
 	}
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
+
+	absWorkDir, err := filepath.Abs(filepath.Clean(workDir))
+	if err != nil {
+		return "", fmt.Errorf("file tool: resolve abs workdir: %w", err)
 	}
-	return filepath.Clean(filepath.Join(workDir, path)), nil
+
+	var resolved string
+	if filepath.IsAbs(path) {
+		resolved = filepath.Clean(path)
+	} else {
+		resolved = filepath.Clean(filepath.Join(absWorkDir, path))
+	}
+
+	absResolved, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("file tool: resolve abs path: %w", err)
+	}
+
+	if absResolved != absWorkDir && !strings.HasPrefix(absResolved, absWorkDir+string(os.PathSeparator)) {
+		return "", fmt.Errorf("file tool: path %q escapes workdir", path)
+	}
+	return absResolved, nil
 }
 
 func relativePath(workDir, target string) string {
