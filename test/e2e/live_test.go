@@ -3,67 +3,72 @@
 package e2e
 
 import (
+	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
+	"github.com/xiewanpeng/go-kimi/internal/soul"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm/moonshot"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
-func TestLiveProviderConfigInitialization(t *testing.T) {
+func TestLiveSoulSingleTurn(t *testing.T) {
 	apiKey := strings.TrimSpace(os.Getenv("KIMI_API_KEY"))
 	if apiKey == "" {
-		t.Skip("KIMI_API_KEY is not set; skipping live e2e test")
+		t.Fatal("KIMI_API_KEY must be set for e2e_live tests")
 	}
 
-	cfg := config.NewDefaultConfig()
-	cfg.Providers = []config.LLMProvider{
-		{
-			Name:    "moonshot-live",
-			Type:    "moonshot",
-			APIKey:  apiKey,
-			BaseURL: "https://api.moonshot.ai/v1",
-		},
-	}
-	cfg.Models = []config.LLMModel{
-		{
-			Name:          "kimi-k2",
-			Provider:      "moonshot-live",
-			ContextWindow: 128000,
-		},
-	}
-	cfg.DefaultProvider = "moonshot-live"
-	cfg.DefaultModel = "kimi-k2"
-
-	path := filepath.Join(t.TempDir(), "live-config.toml")
-	if err := config.SaveConfig(cfg, path); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	baseURL := strings.TrimSpace(os.Getenv("KIMI_BASE_URL"))
+	model := strings.TrimSpace(os.Getenv("KIMI_MODEL"))
+	if model == "" {
+		model = "kimi-k2"
 	}
 
-	loaded, err := config.LoadConfig(path)
+	provider := moonshot.NewMoonshotClient(apiKey, baseURL, model)
+	ctxStore := soul.NewSoulContext(t.TempDir())
+	engine := soul.NewSoul(provider, ctxStore, nil, wire.NoopEmitter{}, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	result, err := engine.Run(ctx, types.ContentParts{
+		types.TextPart{Text: "hello, reply in one sentence"},
+	})
 	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
+		t.Fatalf("Run() with live Moonshot provider error = %v", err)
 	}
-	if err := loaded.Validate(); err != nil {
-		t.Fatalf("validate loaded config: %v", err)
+
+	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
+	if output == "" {
+		t.Fatalf("live response is empty, result=%#v", result.Content)
 	}
-	if loaded.DefaultProvider != "moonshot-live" {
-		t.Fatalf("DefaultProvider = %q, want %q", loaded.DefaultProvider, "moonshot-live")
+
+	messages := ctxStore.Messages()
+	if len(messages) < 2 {
+		t.Fatalf("context message count = %d, want >= 2", len(messages))
 	}
-	if loaded.DefaultModel != "kimi-k2" {
-		t.Fatalf("DefaultModel = %q, want %q", loaded.DefaultModel, "kimi-k2")
+	if messages[0].Role != soul.RoleUser {
+		t.Fatalf("context first role = %q, want user", messages[0].Role)
 	}
-	if len(loaded.Providers) != 1 {
-		t.Fatalf("provider count = %d, want 1", len(loaded.Providers))
+	if messages[len(messages)-1].Role != soul.RoleAssistant {
+		t.Fatalf("context last role = %q, want assistant", messages[len(messages)-1].Role)
 	}
-	if loaded.Providers[0].Type != "moonshot" {
-		t.Fatalf("provider type = %q, want %q", loaded.Providers[0].Type, "moonshot")
+}
+
+func liveTextFromContentParts(parts types.ContentParts) string {
+	var sb strings.Builder
+	for i := range parts {
+		switch typed := parts[i].(type) {
+		case types.TextPart:
+			sb.WriteString(typed.Text)
+		case *types.TextPart:
+			if typed != nil {
+				sb.WriteString(typed.Text)
+			}
+		}
 	}
-	if loaded.Providers[0].APIKey == "" {
-		t.Fatal("provider API key should not be empty")
-	}
-	if loaded.Providers[0].APIKey != apiKey {
-		t.Fatal("provider API key changed after save/load")
-	}
+	return sb.String()
 }
