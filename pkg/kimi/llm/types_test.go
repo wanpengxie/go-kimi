@@ -138,6 +138,28 @@ func TestDeriveModelCapabilitiesFromExplicitModelCapabilities(t *testing.T) {
 	}
 }
 
+func TestDeriveModelCapabilitiesNormalizesAliases(t *testing.T) {
+	t.Parallel()
+
+	model := config.LLMModel{
+		Name: "moonshot-v1",
+		Capabilities: []types.ModelCapability{
+			"function_calling",
+			"long_ctx",
+			"audio input",
+		},
+	}
+
+	got := DeriveModelCapabilities(model)
+	want := map[types.ModelCapability]bool{
+		types.ModelCapabilityToolCall:   true,
+		types.ModelCapabilityLongCtx:    true,
+		types.ModelCapabilityAudioInput: true,
+	}
+
+	assertCapabilitySet(t, got, want)
+}
+
 func TestDeriveModelCapabilitiesHeuristics(t *testing.T) {
 	t.Parallel()
 

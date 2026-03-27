@@ -33,6 +33,12 @@ var (
 	_ WireMessage = ApprovalRequest{}
 )
 
+type unregisteredWireMessage struct{}
+
+func (unregisteredWireMessage) wireMessageType() WireMessageType {
+	return "unregistered"
+}
+
 func TestSerializeDeserializeWireMessageRoundTripAllTypes(t *testing.T) {
 	t.Parallel()
 
@@ -291,6 +297,13 @@ func TestWireMessageSerdeErrors(t *testing.T) {
 
 	if _, err := SerializeWireMessage(nil); err == nil {
 		t.Fatal("SerializeWireMessage(nil) expected error")
+	}
+	var nilTurnBegin *TurnBegin
+	if _, err := SerializeWireMessage(nilTurnBegin); err == nil {
+		t.Fatal("SerializeWireMessage(typed nil pointer) expected error")
+	}
+	if _, err := SerializeWireMessage(unregisteredWireMessage{}); err == nil || !strings.Contains(err.Error(), "unregistered type") {
+		t.Fatalf("SerializeWireMessage(unregistered) error = %v", err)
 	}
 
 	if _, err := DeserializeWireMessage(nil); err == nil {

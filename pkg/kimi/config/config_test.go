@@ -164,6 +164,82 @@ func TestConfigValidateErrors(t *testing.T) {
 			},
 			wantSubstr: "capabilities",
 		},
+		{
+			name: "search enabled with empty endpoint",
+			mutate: func(c Config) Config {
+				c.Services.MoonshotSearch.Endpoint = "   "
+				return c
+			},
+			wantSubstr: "services.moonshot_search.endpoint",
+		},
+		{
+			name: "fetch enabled with invalid max content bytes",
+			mutate: func(c Config) Config {
+				c.Services.MoonshotFetch.MaxContentBytes = 0
+				return c
+			},
+			wantSubstr: "services.moonshot_fetch.max_content_bytes",
+		},
+		{
+			name: "mcp duplicate client name",
+			mutate: func(c Config) Config {
+				c.MCP.Clients = []MCPClientConfig{
+					{
+						Name:           "filesystem",
+						Command:        "cmd-a",
+						TimeoutSeconds: 10,
+					},
+					{
+						Name:           "filesystem",
+						Command:        "cmd-b",
+						TimeoutSeconds: 10,
+					},
+				}
+				return c
+			},
+			wantSubstr: "duplicates",
+		},
+		{
+			name: "mcp enabled client missing command",
+			mutate: func(c Config) Config {
+				c.MCP.Clients = []MCPClientConfig{
+					{
+						Name:           "filesystem",
+						TimeoutSeconds: 10,
+					},
+				}
+				return c
+			},
+			wantSubstr: "command must not be empty",
+		},
+		{
+			name: "mcp env contains empty key",
+			mutate: func(c Config) Config {
+				c.MCP.Clients = []MCPClientConfig{
+					{
+						Name:           "filesystem",
+						Command:        "cmd",
+						TimeoutSeconds: 10,
+						Env: map[string]string{
+							"": "bad",
+						},
+					},
+				}
+				return c
+			},
+			wantSubstr: "env contains empty key",
+		},
+		{
+			name: "provider oauth account id empty",
+			mutate: func(c Config) Config {
+				c.Providers[0].OAuth = &OAuthRef{
+					Provider:  "moonshot",
+					AccountID: " ",
+				}
+				return c
+			},
+			wantSubstr: "oauth.account_id",
+		},
 	}
 
 	for _, tc := range tests {
