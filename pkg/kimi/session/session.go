@@ -99,15 +99,13 @@ func Find(workDir, sessionID string) (*Session, error) {
 		return nil, err
 	}
 
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return nil, errors.New("session find: empty session id")
+	normalizedSessionID, dir, err := resolveSessionDir(absWorkDir, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session find: %w", err)
 	}
-
-	dir := filepath.Join(sessionsRoot(absWorkDir), sessionID)
 	info, err := os.Stat(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("session find: %q not found", sessionID)
+		return nil, fmt.Errorf("session find: %q not found", normalizedSessionID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("session find: stat %q: %w", dir, err)
@@ -127,13 +125,13 @@ func Find(workDir, sessionID string) (*Session, error) {
 	}
 
 	return &Session{
-		ID:          sessionID,
+		ID:          normalizedSessionID,
 		WorkDir:     absWorkDir,
 		Dir:         dir,
 		ContextFile: filepath.Join(dir, contextFileName),
 		WireFile:    filepath.Join(dir, wireFileName),
 		State:       state,
-		Title:       sessionID,
+		Title:       normalizedSessionID,
 		UpdatedAt:   updatedAt,
 	}, nil
 }
@@ -149,7 +147,11 @@ func Continue(workDir string) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session continue: %w", err)
 	}
-	return Find(absWorkDir, sessionID)
+	normalizedSessionID, err := normalizeSessionID(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session continue: %w", err)
+	}
+	return Find(absWorkDir, normalizedSessionID)
 }
 
 // List returns all sessions sorted by UpdatedAt in descending order.
@@ -219,29 +221,35 @@ func (s *Session) Delete() error {
 	if s == nil {
 		return errors.New("session delete: nil session")
 	}
-	dir := strings.TrimSpace(s.Dir)
-	if dir == "" {
-		return errors.New("session delete: empty session dir")
+	workDir := strings.TrimSpace(s.WorkDir)
+	if workDir == "" {
+		return errors.New("session delete: empty work dir")
+	}
+
+	absWorkDir, err := resolveWorkDir(workDir)
+	if err != nil {
+		return fmt.Errorf("session delete: %w", err)
+	}
+
+	normalizedSessionID, dir, err := resolveSessionDir(absWorkDir, s.ID)
+	if err != nil {
+		return fmt.Errorf("session delete: %w", err)
 	}
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("session delete: remove %q: %w", dir, err)
 	}
 
-	workDir := strings.TrimSpace(s.WorkDir)
-	if workDir == "" {
-		return nil
-	}
-	lastSessionID, err := readLastSessionID(workDir)
+	lastSessionID, err := readLastSessionID(absWorkDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("session delete: read last session id: %w", err)
 	}
-	if lastSessionID != s.ID {
+	if lastSessionID != normalizedSessionID {
 		return nil
 	}
-	if err := os.Remove(lastSessionIDPath(workDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(lastSessionIDPath(absWorkDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("session delete: remove last session id: %w", err)
 	}
 	return nil
@@ -288,6 +296,51 @@ func resolveWorkDir(workDir string) (string, error) {
 
 func sessionsRoot(workDir string) string {
 	return filepath.Join(workDir, kimiDirName, sessionsDirName)
+}
+
+func resolveSessionDir(workDir, sessionID string) (string, string, error) {
+	normalizedSessionID, err := normalizeSessionID(sessionID)
+	if err != nil {
+		return "", "", err
+	}
+
+	root := filepath.Clean(sessionsRoot(workDir))
+	dir := filepath.Join(root, normalizedSessionID)
+	if !pathWithinRoot(root, dir) {
+		return "", "", fmt.Errorf("session: invalid session id %q", normalizedSessionID)
+	}
+	return normalizedSessionID, dir, nil
+}
+
+func normalizeSessionID(sessionID string) (string, error) {
+	normalized := strings.TrimSpace(sessionID)
+	if normalized == "" {
+		return "", errors.New("session: session id is required")
+	}
+	if normalized == "." || normalized == ".." {
+		return "", fmt.Errorf("session: invalid session id %q", normalized)
+	}
+	if strings.Contains(normalized, "/") || strings.Contains(normalized, "\\") {
+		return "", fmt.Errorf("session: invalid session id %q", normalized)
+	}
+	return normalized, nil
+}
+
+func pathWithinRoot(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return !filepath.IsAbs(rel)
 }
 
 func lastSessionIDPath(workDir string) string {

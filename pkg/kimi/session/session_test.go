@@ -117,6 +117,53 @@ func TestContinueWithoutLastSessionIDFails(t *testing.T) {
 	}
 }
 
+func TestFindRejectsPathTraversalSessionID(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+
+	testCases := []string{
+		"../..",
+		"../../etc/passwd",
+		".",
+	}
+	for _, sessionID := range testCases {
+		sessionID := sessionID
+		t.Run(sessionID, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Find(workDir, sessionID)
+			if err == nil {
+				t.Fatalf("Find(%q) error = nil, want error", sessionID)
+			}
+			if !strings.Contains(err.Error(), "invalid session id") {
+				t.Fatalf("Find(%q) error = %v, want invalid session id", sessionID, err)
+			}
+		})
+	}
+}
+
+func TestContinueRejectsPoisonedLastSessionID(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	if _, err := Create(workDir); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	lastSessionIDPath := filepath.Join(workDir, ".kimi", "sessions", lastSessionIDFileName)
+	if err := os.WriteFile(lastSessionIDPath, []byte("../../etc/passwd\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(poisoned last_session_id) error = %v", err)
+	}
+
+	_, err := Continue(workDir)
+	if err == nil {
+		t.Fatal("Continue(poisoned last_session_id) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "invalid session id") {
+		t.Fatalf("Continue(poisoned last_session_id) error = %v, want invalid session id", err)
+	}
+}
+
 func TestListReturnsSessionsByUpdatedAtDesc(t *testing.T) {
 	t.Parallel()
 
@@ -222,6 +269,32 @@ func TestDeleteRemovesSessionAndPointer(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workDir, ".kimi", "sessions", lastSessionIDFileName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("last_session_id should be removed after deleting current session, stat err = %v", err)
+	}
+}
+
+func TestDeleteRejectsTraversalSessionID(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	guardPath := filepath.Join(workDir, "guard-dir")
+	if err := os.MkdirAll(guardPath, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%q) error = %v", guardPath, err)
+	}
+
+	s := &Session{
+		ID:      "../guard-dir",
+		WorkDir: workDir,
+		Dir:     guardPath,
+	}
+	err := s.Delete()
+	if err == nil {
+		t.Fatal("Delete(traversal session id) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "invalid session id") {
+		t.Fatalf("Delete(traversal session id) error = %v, want invalid session id", err)
+	}
+	if _, err := os.Stat(guardPath); err != nil {
+		t.Fatalf("guard path should remain after rejected delete, stat err = %v", err)
 	}
 }
 
