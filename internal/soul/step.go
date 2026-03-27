@@ -2,6 +2,7 @@ package soul
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -87,6 +88,13 @@ func (s *Soul) executeTools(ctx context.Context, toolCalls []types.ToolCall) ([]
 		wg.Add(1)
 		go func(idx int, toolCall types.ToolCall) {
 			defer wg.Done()
+
+			approved, feedback := s.requestToolApproval(ctx, toolCall)
+			if !approved {
+				results[idx] = toolRejectedResult(toolCall, feedback)
+				return
+			}
+
 			results[idx] = s.executeOneTool(ctx, toolCall)
 		}(i, call)
 	}
@@ -124,6 +132,18 @@ func (s *Soul) executeOneTool(ctx context.Context, call types.ToolCall) types.To
 		result.Name = call.Name
 	}
 	return result
+}
+
+func (s *Soul) requestToolApproval(ctx context.Context, call types.ToolCall) (bool, string) {
+	if s.approval == nil {
+		return true, ""
+	}
+
+	return s.approval.Request(
+		ctx,
+		call.Name,
+		toolApprovalDescription(call),
+	)
 }
 
 func (s *Soul) lookupExecutor(name string) (ToolExecutor, bool) {
@@ -212,6 +232,28 @@ func toolErrorResult(call types.ToolCall, message string) types.ToolResult {
 		},
 		IsError: true,
 	}
+}
+
+func toolRejectedResult(call types.ToolCall, feedback string) types.ToolResult {
+	feedback = strings.TrimSpace(feedback)
+	if feedback == "" {
+		return toolErrorResult(call, "tool call rejected")
+	}
+	return toolErrorResult(call, "tool call rejected: "+feedback)
+}
+
+func toolApprovalDescription(call types.ToolCall) string {
+	encodedArgs, err := json.Marshal(call.Arguments)
+	if err != nil {
+		return fmt.Sprintf("tool=%s args=%v", call.Name, call.Arguments)
+	}
+
+	argumentSummary := strings.TrimSpace(string(encodedArgs))
+	if argumentSummary == "" || argumentSummary == "null" {
+		return fmt.Sprintf("tool=%s", call.Name)
+	}
+
+	return fmt.Sprintf("tool=%s args=%s", call.Name, argumentSummary)
 }
 
 func cloneContentParts(parts types.ContentParts) types.ContentParts {

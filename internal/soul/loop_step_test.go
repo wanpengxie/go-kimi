@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
@@ -339,6 +340,121 @@ func TestSoulStepToolExecutorErrorBecomesToolResult(t *testing.T) {
 	}
 	if !strings.Contains(value["error"].(string), "explode") {
 		t.Fatalf("ToolResult error payload = %#v, want explode", value)
+	}
+}
+
+func TestSoulStepApprovalRejectSkipsExecutor(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{
+					ID:   "call-1",
+					Name: "search",
+					Arguments: map[string]any{
+						"q": "go",
+					},
+				}},
+				{Done: true},
+			},
+		},
+	}
+
+	executed := false
+	registry := mockRegistry{
+		executors: map[string]ToolExecutor{
+			"search": executorFunc(func(_ context.Context, call types.ToolCall) (types.ToolResult, error) {
+				executed = true
+				return types.ToolResult{
+					ToolCallID: call.ID,
+					Name:       call.Name,
+					Value: types.ToolReturnValue{
+						Value: map[string]any{"ok": true},
+					},
+				}, nil
+			}),
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	s := NewSoul(provider, ctxStore, registry, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.SetYolo(false)
+
+	type stepOutcome struct {
+		result StepResult
+		err    error
+	}
+	outcomeCh := make(chan stepOutcome, 1)
+	go func() {
+		result, err := s.step(context.Background(), "turn-approval-reject")
+		outcomeCh <- stepOutcome{result: result, err: err}
+	}()
+
+	events := make([]wire.WireMessage, 0, 4)
+	var approvalReq wire.ApprovalRequest
+	gotApproval := false
+	deadline := time.After(time.Second)
+	for !gotApproval {
+		select {
+		case msg := <-wireCh:
+			if msg == nil {
+				t.Fatal("received nil wire message while waiting approval request")
+			}
+			events = append(events, msg)
+			if request, ok := msg.(wire.ApprovalRequest); ok {
+				approvalReq = request
+				gotApproval = true
+			}
+		case <-deadline:
+			t.Fatal("timeout waiting for approval request wire message")
+		}
+	}
+
+	if err := s.RespondApproval(approvalReq.ID, ApprovalReject, "blocked by policy"); err != nil {
+		t.Fatalf("RespondApproval() error = %v", err)
+	}
+
+	var outcome stepOutcome
+	select {
+	case outcome = <-outcomeCh:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for step completion")
+	}
+	if outcome.err != nil {
+		t.Fatalf("step() error = %v", outcome.err)
+	}
+	if executed {
+		t.Fatalf("tool executor executed = true, want false")
+	}
+	if len(outcome.result.ToolResults) != 1 {
+		t.Fatalf("len(result.ToolResults) = %d, want 1", len(outcome.result.ToolResults))
+	}
+	if !outcome.result.ToolResults[0].IsError {
+		t.Fatalf("ToolResult.IsError = false, want true")
+	}
+	value, ok := outcome.result.ToolResults[0].Value.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("ToolResult.Value type = %T, want map[string]any", outcome.result.ToolResults[0].Value.Value)
+	}
+	errorText, _ := value["error"].(string)
+	if !strings.Contains(errorText, "rejected") || !strings.Contains(errorText, "blocked by policy") {
+		t.Fatalf("ToolResult error payload = %#v, want rejected + blocked by policy", value)
+	}
+
+	events = append(events, drainWireMessages(wireCh)...)
+	if len(events) != 3 {
+		t.Fatalf("wire event count = %d, want 3", len(events))
+	}
+	if _, ok := events[0].(wire.ToolCallRequest); !ok {
+		t.Fatalf("event[0] = %T, want wire.ToolCallRequest", events[0])
+	}
+	if _, ok := events[1].(wire.ApprovalRequest); !ok {
+		t.Fatalf("event[1] = %T, want wire.ApprovalRequest", events[1])
+	}
+	if _, ok := events[2].(wire.ToolCallResult); !ok {
+		t.Fatalf("event[2] = %T, want wire.ToolCallResult", events[2])
 	}
 }
 

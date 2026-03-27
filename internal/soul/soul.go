@@ -36,9 +36,6 @@ type StepResult struct {
 	Usage       types.TokenUsage
 }
 
-// ApprovalState is a placeholder for M2-D approval integration.
-type ApprovalState struct{}
-
 // Soul coordinates provider calls, context persistence and tool execution.
 type Soul struct {
 	provider     llm.ChatProvider
@@ -62,7 +59,7 @@ func NewSoul(
 		w = wire.NoopEmitter{}
 	}
 
-	return &Soul{
+	soul := &Soul{
 		provider:     provider,
 		context:      ctx,
 		registry:     registry,
@@ -70,6 +67,8 @@ func NewSoul(
 		systemPrompt: strings.TrimSpace(systemPrompt),
 		maxSteps:     defaultMaxSteps,
 	}
+	soul.approval = NewApprovalState(soul.emitApprovalRequest)
+	return soul
 }
 
 // SetMaxSteps overrides the turn loop limit.
@@ -82,6 +81,30 @@ func (s *Soul) SetMaxSteps(maxSteps int) {
 		return
 	}
 	s.maxSteps = maxSteps
+}
+
+// SetYolo toggles yolo mode for tool approval.
+func (s *Soul) SetYolo(v bool) {
+	if s == nil || s.approval == nil {
+		return
+	}
+	s.approval.SetYolo(v)
+}
+
+// IsYolo reports the current yolo mode.
+func (s *Soul) IsYolo() bool {
+	if s == nil || s.approval == nil {
+		return true
+	}
+	return s.approval.IsYolo()
+}
+
+// RespondApproval resolves one pending approval request.
+func (s *Soul) RespondApproval(requestID string, decision ApprovalDecision, feedback string) error {
+	if s == nil || s.approval == nil {
+		return errors.New("soul: approval is unavailable")
+	}
+	return s.approval.Respond(requestID, decision, feedback)
 }
 
 func (s *Soul) ensureReady() error {
@@ -100,7 +123,20 @@ func (s *Soul) ensureReady() error {
 	if s.maxSteps < 1 {
 		s.maxSteps = defaultMaxSteps
 	}
-	// M2-D will activate approval checks in step().
-	_ = s.approval
+	if s.approval == nil {
+		s.approval = NewApprovalState(s.emitApprovalRequest)
+	}
 	return nil
+}
+
+func (s *Soul) emitApprovalRequest(request *ApprovalRequest) {
+	if request == nil {
+		return
+	}
+	_ = s.emit(wire.ApprovalRequest{
+		ID:          request.ID,
+		Kind:        "tool_call",
+		Title:       request.Action,
+		Description: request.Description,
+	})
 }
