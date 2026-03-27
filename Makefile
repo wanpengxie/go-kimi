@@ -11,6 +11,7 @@ GOLANGCI_LINT_CACHE ?= $(abspath $(CACHE_DIR)/golangci-lint)
 GOENV := GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) GOPATH=$(GOPATH)
 GOIMPORTS := $(GOENV) $(GO) run golang.org/x/tools/cmd/goimports@v0.30.0
 GOLANGCI_LINT := $(GOENV) $(GO) run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.63.0
+COVERPKG := $(shell $(GO) list ./... | paste -sd, -)
 
 .PHONY: prepare-cache build test test-coverage test-e2e test-e2e-live lint fmt ci
 
@@ -24,7 +25,7 @@ test: prepare-cache
 	$(GOENV) $(GO) test $(PKGS)
 
 test-coverage: prepare-cache
-	$(GOENV) $(GO) test -coverprofile=coverage.out -coverpkg=./... $(PKGS)
+	$(GOENV) $(GO) test -coverprofile=coverage.out -coverpkg=$(COVERPKG) $(PKGS)
 	$(GOENV) $(GO) tool cover -func=coverage.out | tail -n 1
 
 test-e2e: prepare-cache
