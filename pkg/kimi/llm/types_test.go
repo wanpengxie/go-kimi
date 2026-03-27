@@ -55,16 +55,16 @@ func TestModelCapabilityConstants(t *testing.T) {
 
 	tests := []struct {
 		name string
-		got  ModelCapability
-		want ModelCapability
+		got  types.ModelCapability
+		want types.ModelCapability
 	}{
-		{name: "reasoning", got: ModelCapabilityReasoning, want: "reasoning"},
-		{name: "tool_call", got: ModelCapabilityToolCall, want: "tool_call"},
-		{name: "vision", got: ModelCapabilityVision, want: "vision"},
-		{name: "audio_input", got: ModelCapabilityAudioInput, want: "audio_input"},
-		{name: "video_input", got: ModelCapabilityVideoInput, want: "video_input"},
-		{name: "json_mode", got: ModelCapabilityJSONMode, want: "json_mode"},
-		{name: "long_context", got: ModelCapabilityLongCtx, want: "long_context"},
+		{name: "reasoning", got: types.ModelCapabilityReasoning, want: "reasoning"},
+		{name: "tool_call", got: types.ModelCapabilityToolCall, want: "tool_call"},
+		{name: "vision", got: types.ModelCapabilityVision, want: "vision"},
+		{name: "audio_input", got: types.ModelCapabilityAudioInput, want: "audio_input"},
+		{name: "video_input", got: types.ModelCapabilityVideoInput, want: "video_input"},
+		{name: "json_mode", got: types.ModelCapabilityJSONMode, want: "json_mode"},
+		{name: "long_context", got: types.ModelCapabilityLongCtx, want: "long_context"},
 	}
 
 	for _, tc := range tests {
@@ -82,9 +82,9 @@ func TestLLMStruct(t *testing.T) {
 	t.Parallel()
 
 	provider := stubProvider{modelName: "kimi-k2"}
-	capabilities := map[ModelCapability]bool{
-		ModelCapabilityReasoning: true,
-		ModelCapabilityToolCall:  true,
+	capabilities := map[types.ModelCapability]bool{
+		types.ModelCapabilityReasoning: true,
+		types.ModelCapabilityToolCall:  true,
 	}
 
 	model := LLM{
@@ -99,10 +99,10 @@ func TestLLMStruct(t *testing.T) {
 	if model.MaxContextSize != 128000 {
 		t.Fatalf("MaxContextSize = %d, want %d", model.MaxContextSize, 128000)
 	}
-	if !model.Capabilities[ModelCapabilityReasoning] {
+	if !model.Capabilities[types.ModelCapabilityReasoning] {
 		t.Fatal("reasoning capability should be true")
 	}
-	if !model.Capabilities[ModelCapabilityToolCall] {
+	if !model.Capabilities[types.ModelCapabilityToolCall] {
 		t.Fatal("tool_call capability should be true")
 	}
 }
@@ -125,15 +125,15 @@ func TestDeriveModelCapabilitiesFromExplicitModelCapabilities(t *testing.T) {
 
 	got := DeriveModelCapabilities(model)
 
-	want := map[ModelCapability]bool{
-		ModelCapabilityReasoning:          true,
-		ModelCapabilityToolCall:           true,
-		ModelCapabilityJSONMode:           true,
-		ModelCapability("custom_capability"): true,
+	want := map[types.ModelCapability]bool{
+		types.ModelCapabilityReasoning:             true,
+		types.ModelCapabilityToolCall:              true,
+		types.ModelCapabilityJSONMode:              true,
+		types.ModelCapability("custom_capability"): true,
 	}
 
 	assertCapabilitySet(t, got, want)
-	if got[ModelCapabilityVision] {
+	if got[types.ModelCapabilityVision] {
 		t.Fatal("vision should not be auto-derived when explicit capabilities are present")
 	}
 }
@@ -147,14 +147,14 @@ func TestDeriveModelCapabilitiesHeuristics(t *testing.T) {
 	}
 
 	got := DeriveModelCapabilities(model)
-	want := map[ModelCapability]bool{
-		ModelCapabilityReasoning:  true,
-		ModelCapabilityToolCall:   true,
-		ModelCapabilityVision:     true,
-		ModelCapabilityAudioInput: true,
-		ModelCapabilityVideoInput: true,
-		ModelCapabilityJSONMode:   true,
-		ModelCapabilityLongCtx:    true,
+	want := map[types.ModelCapability]bool{
+		types.ModelCapabilityReasoning:  true,
+		types.ModelCapabilityToolCall:   true,
+		types.ModelCapabilityVision:     true,
+		types.ModelCapabilityAudioInput: true,
+		types.ModelCapabilityVideoInput: true,
+		types.ModelCapabilityJSONMode:   true,
+		types.ModelCapabilityLongCtx:    true,
 	}
 
 	assertCapabilitySet(t, got, want)
@@ -173,10 +173,10 @@ func TestDeriveModelCapabilitiesLongContextFromContextWindow(t *testing.T) {
 
 	got := DeriveModelCapabilities(model)
 
-	if !got[ModelCapabilityLongCtx] {
+	if !got[types.ModelCapabilityLongCtx] {
 		t.Fatal("long_context should be derived when context_window >= 128000")
 	}
-	if !got[ModelCapabilityToolCall] {
+	if !got[types.ModelCapabilityToolCall] {
 		t.Fatal("tool_call should stay in capability set")
 	}
 }
@@ -230,7 +230,7 @@ func TestModelDisplayName(t *testing.T) {
 	}
 }
 
-func assertCapabilitySet(t *testing.T, got map[ModelCapability]bool, want map[ModelCapability]bool) {
+func assertCapabilitySet(t *testing.T, got map[types.ModelCapability]bool, want map[types.ModelCapability]bool) {
 	t.Helper()
 
 	if len(got) != len(want) {

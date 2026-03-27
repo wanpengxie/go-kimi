@@ -5,6 +5,7 @@ import (
 	"unicode"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
 // ProviderType identifies a model provider backend.
@@ -19,31 +20,18 @@ const (
 	ProviderTypeDeepSeek    ProviderType = "deepseek"
 )
 
-// ModelCapability describes an optional model feature.
-type ModelCapability string
-
-const (
-	ModelCapabilityReasoning  ModelCapability = "reasoning"
-	ModelCapabilityToolCall   ModelCapability = "tool_call"
-	ModelCapabilityVision     ModelCapability = "vision"
-	ModelCapabilityAudioInput ModelCapability = "audio_input"
-	ModelCapabilityVideoInput ModelCapability = "video_input"
-	ModelCapabilityJSONMode   ModelCapability = "json_mode"
-	ModelCapabilityLongCtx    ModelCapability = "long_context"
-)
-
 const longContextThreshold = 128000
 
 // LLM is the runtime model selection bundle.
 type LLM struct {
 	ChatProvider   ChatProvider
 	MaxContextSize int
-	Capabilities   map[ModelCapability]bool
+	Capabilities   map[types.ModelCapability]bool
 }
 
 // DeriveModelCapabilities derives a capability set from model metadata.
-func DeriveModelCapabilities(model config.LLMModel) map[ModelCapability]bool {
-	capabilities := make(map[ModelCapability]bool)
+func DeriveModelCapabilities(model config.LLMModel) map[types.ModelCapability]bool {
+	capabilities := make(map[types.ModelCapability]bool)
 
 	for _, capability := range model.Capabilities {
 		normalized := normalizeCapability(string(capability))
@@ -56,25 +44,25 @@ func DeriveModelCapabilities(model config.LLMModel) map[ModelCapability]bool {
 	name := strings.ToLower(strings.TrimSpace(model.Name))
 	if len(capabilities) == 0 {
 		if strings.Contains(name, "k2") || strings.Contains(name, "reason") {
-			capabilities[ModelCapabilityReasoning] = true
-			capabilities[ModelCapabilityToolCall] = true
+			capabilities[types.ModelCapabilityReasoning] = true
+			capabilities[types.ModelCapabilityToolCall] = true
 		}
 		if strings.Contains(name, "vision") || strings.Contains(name, "vl") {
-			capabilities[ModelCapabilityVision] = true
+			capabilities[types.ModelCapabilityVision] = true
 		}
 		if strings.Contains(name, "audio") {
-			capabilities[ModelCapabilityAudioInput] = true
+			capabilities[types.ModelCapabilityAudioInput] = true
 		}
 		if strings.Contains(name, "video") {
-			capabilities[ModelCapabilityVideoInput] = true
+			capabilities[types.ModelCapabilityVideoInput] = true
 		}
 		if strings.Contains(name, "json") || strings.Contains(name, "structured") {
-			capabilities[ModelCapabilityJSONMode] = true
+			capabilities[types.ModelCapabilityJSONMode] = true
 		}
 	}
 
 	if model.ContextWindow >= longContextThreshold {
-		capabilities[ModelCapabilityLongCtx] = true
+		capabilities[types.ModelCapabilityLongCtx] = true
 	}
 
 	return capabilities
@@ -101,7 +89,7 @@ func ModelDisplayName(modelName string) string {
 	return strings.Join(parts, " ")
 }
 
-func normalizeCapability(raw string) ModelCapability {
+func normalizeCapability(raw string) types.ModelCapability {
 	normalized := strings.TrimSpace(strings.ToLower(raw))
 	normalized = strings.ReplaceAll(normalized, "-", "_")
 	normalized = strings.ReplaceAll(normalized, " ", "_")
@@ -110,21 +98,21 @@ func normalizeCapability(raw string) ModelCapability {
 	case "":
 		return ""
 	case "reasoning":
-		return ModelCapabilityReasoning
+		return types.ModelCapabilityReasoning
 	case "toolcall", "tool_call", "function_call", "function_calling", "function_calls":
-		return ModelCapabilityToolCall
+		return types.ModelCapabilityToolCall
 	case "vision":
-		return ModelCapabilityVision
+		return types.ModelCapabilityVision
 	case "audio", "audio_input":
-		return ModelCapabilityAudioInput
+		return types.ModelCapabilityAudioInput
 	case "video", "video_input":
-		return ModelCapabilityVideoInput
+		return types.ModelCapabilityVideoInput
 	case "json", "json_mode":
-		return ModelCapabilityJSONMode
+		return types.ModelCapabilityJSONMode
 	case "long_context", "long_ctx", "longcontext":
-		return ModelCapabilityLongCtx
+		return types.ModelCapabilityLongCtx
 	default:
-		return ModelCapability(normalized)
+		return types.ModelCapability(normalized)
 	}
 }
 
