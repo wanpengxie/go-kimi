@@ -38,10 +38,6 @@ test-e2e-live: prepare-cache
 		source .env.local; \
 		set +a; \
 	fi; \
-	if [[ -z "$${KIMI_API_KEY:-}" ]]; then \
-		echo "KIMI_API_KEY is not set, skipping live e2e tests."; \
-		exit 0; \
-	fi; \
 	$(GOENV) $(GO) test -tags=e2e_live $(E2E_PKGS)
 
 lint: prepare-cache
