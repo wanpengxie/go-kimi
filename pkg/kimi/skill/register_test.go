@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xiewanpeng/go-kimi/internal/soul"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
@@ -86,6 +87,13 @@ func TestRegisterSkillsRunsThroughSoulExecutionPath(t *testing.T) {
 	}
 
 	nested := requests[1]
+	nestedToolNames := toolNames(nested.Tools)
+	if hasToolName(nested.Tools, "skill:demo") {
+		t.Fatalf("nested request tools = %#v, want no skill:*", nestedToolNames)
+	}
+	if !hasToolName(nested.Tools, "echo") {
+		t.Fatalf("nested request tools = %#v, want base tool echo", nestedToolNames)
+	}
 	if len(nested.Messages) == 0 {
 		t.Fatalf("nested request messages = %d, want > 0", len(nested.Messages))
 	}
@@ -138,6 +146,93 @@ func TestRegisterSkillsCanBeCalledMultipleTimes(t *testing.T) {
 	}
 	if _, ok := byName["skill:extra"]; !ok {
 		t.Fatalf("skill:extra missing in definitions = %#v", defs)
+	}
+}
+
+func TestRegisterSkillsNestedSkillCallDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	provider := &scriptedProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{
+					ToolCall: &types.ToolCall{
+						ID:   "call-outer",
+						Name: "skill:demo",
+					},
+				},
+				{Done: true},
+			},
+			{
+				{
+					ToolCall: &types.ToolCall{
+						ID:   "call-nested",
+						Name: "skill:demo",
+					},
+				},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "nested done"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "outer done"}},
+				{Done: true},
+			},
+		},
+	}
+
+	baseRegistry := tools.NewMapToolRegistry(&noopTool{name: "echo"})
+	ctxStore := soul.NewSoulContext(t.TempDir())
+	engine := soul.NewSoul(provider, ctxStore, baseRegistry, wire.NoopEmitter{}, "")
+
+	RegisterSkills(engine, map[string]*Skill{
+		"demo": {
+			Name:        "demo",
+			Description: "demo skill",
+			Type:        "standard",
+			Content:     "You are demo skill.",
+		},
+	})
+
+	type runResult struct {
+		result soul.StepResult
+		err    error
+	}
+
+	done := make(chan runResult, 1)
+	go func() {
+		result, err := engine.Run(context.Background(), types.ContentParts{
+			types.TextPart{Text: "start"},
+		})
+		done <- runResult{result: result, err: err}
+	}()
+
+	select {
+	case out := <-done:
+		if out.err != nil {
+			t.Fatalf("Run() error = %v", out.err)
+		}
+		if got := textFromParts(out.result.Content); got != "outer done" {
+			t.Fatalf("result text = %q, want outer done", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run() timeout, possible nested skill deadlock")
+	}
+
+	if provider.CallCount() != 4 {
+		t.Fatalf("provider call count = %d, want 4", provider.CallCount())
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 4 {
+		t.Fatalf("len(requests) = %d, want 4", len(requests))
+	}
+
+	nestedToolNames := toolNames(requests[1].Tools)
+	if hasToolName(requests[1].Tools, "skill:demo") {
+		t.Fatalf("nested request tools = %#v, want no skill:*", nestedToolNames)
 	}
 }
 
@@ -234,6 +329,32 @@ func cloneChatRequest(req llm.ChatRequest) llm.ChatRequest {
 		copy(out.Tools, req.Tools)
 	}
 	return out
+}
+
+func toolNames(defs []llm.ToolDefinition) []string {
+	names := make([]string, 0, len(defs))
+	for i := range defs {
+		name := strings.TrimSpace(defs[i].Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func hasToolName(defs []llm.ToolDefinition, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return false
+	}
+	for i := range defs {
+		if strings.TrimSpace(defs[i].Name) == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func textFromParts(parts types.ContentParts) string {

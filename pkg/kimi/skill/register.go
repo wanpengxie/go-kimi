@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xiewanpeng/go-kimi/internal/soul"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
@@ -74,9 +75,10 @@ func RegisterSkills(s *soul.Soul, skills map[string]*Skill) {
 				Parameters:  decodeSchema(skillParameterSchema),
 			},
 			&SkillRunner{
-				soul:  s,
-				skill: sk,
-				runMu: &registry.runMu,
+				soul:     s,
+				skill:    sk,
+				runMu:    &registry.runMu,
+				registry: registry,
 			},
 		)
 	}
@@ -84,9 +86,10 @@ func RegisterSkills(s *soul.Soul, skills map[string]*Skill) {
 
 // SkillRunner executes one skill tool invocation.
 type SkillRunner struct {
-	soul  *soul.Soul
-	skill *Skill
-	runMu *sync.Mutex
+	soul     *soul.Soul
+	skill    *Skill
+	runMu    *sync.Mutex
+	registry *skillRegistry
 }
 
 // Execute runs the skill prompt via soul.Run and returns the nested assistant output.
@@ -114,6 +117,12 @@ func (r *SkillRunner) Execute(ctx context.Context, call types.ToolCall) (types.T
 		defer r.runMu.Unlock()
 	}
 
+	disableSkillToolRestore := func() {}
+	if r.registry != nil {
+		disableSkillToolRestore = r.registry.enterNestedSkillToolDisabled()
+	}
+	defer disableSkillToolRestore()
+
 	runResult, runErr := r.soul.Run(ctx, types.ContentParts{
 		types.TextPart{Text: input},
 	})
@@ -136,6 +145,7 @@ type skillRegistry struct {
 	executors  map[string]soul.ToolExecutor
 	runMu      sync.Mutex
 	registerMu sync.RWMutex
+	nestedRuns atomic.Int32
 }
 
 func ensureSkillRegistry(s *soul.Soul) *skillRegistry {
@@ -182,6 +192,7 @@ func (r *skillRegistry) Definitions() []llm.ToolDefinition {
 	if r == nil {
 		return nil
 	}
+	filterSkillTools := r.nestedSkillToolDisabled()
 
 	merged := make(map[string]llm.ToolDefinition)
 	if r.base != nil {
@@ -192,12 +203,18 @@ func (r *skillRegistry) Definitions() []llm.ToolDefinition {
 				continue
 			}
 			baseDefs[i].Name = name
+			if filterSkillTools && strings.HasPrefix(name, skillToolPrefix) {
+				continue
+			}
 			merged[name] = baseDefs[i]
 		}
 	}
 
 	r.registerMu.RLock()
 	for name, definition := range r.defs {
+		if filterSkillTools && strings.HasPrefix(name, skillToolPrefix) {
+			continue
+		}
 		merged[name] = definition
 	}
 	r.registerMu.RUnlock()
@@ -224,6 +241,9 @@ func (r *skillRegistry) Executor(name string) (soul.ToolExecutor, bool) {
 	if r == nil || name == "" {
 		return nil, false
 	}
+	if r.nestedSkillToolDisabled() && strings.HasPrefix(name, skillToolPrefix) {
+		return nil, false
+	}
 
 	r.registerMu.RLock()
 	executor, ok := r.executors[name]
@@ -236,6 +256,20 @@ func (r *skillRegistry) Executor(name string) (soul.ToolExecutor, bool) {
 		return nil, false
 	}
 	return r.base.Executor(name)
+}
+
+func (r *skillRegistry) enterNestedSkillToolDisabled() func() {
+	if r == nil {
+		return func() {}
+	}
+	r.nestedRuns.Add(1)
+	return func() {
+		r.nestedRuns.Add(-1)
+	}
+}
+
+func (r *skillRegistry) nestedSkillToolDisabled() bool {
+	return r != nil && r.nestedRuns.Load() > 0
 }
 
 func skillToolName(name string) string {
