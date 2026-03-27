@@ -83,6 +83,22 @@ func (s *Soul) SetMaxSteps(maxSteps int) {
 	s.maxSteps = maxSteps
 }
 
+// ToolRegistry returns the current tool registry.
+func (s *Soul) ToolRegistry() ToolRegistry {
+	if s == nil {
+		return nil
+	}
+	return s.registry
+}
+
+// SetToolRegistry replaces the current tool registry.
+func (s *Soul) SetToolRegistry(registry ToolRegistry) {
+	if s == nil {
+		return
+	}
+	s.registry = registry
+}
+
 // SetYolo toggles yolo mode for tool approval.
 func (s *Soul) SetYolo(v bool) {
 	if s == nil || s.approval == nil {
