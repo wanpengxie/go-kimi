@@ -369,9 +369,11 @@ func (c *MoonshotClient) buildChatCompletionRequest(req llm.ChatRequest, stream 
 	messages := make([]chatCompletionMessageInput, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		messages = append(messages, chatCompletionMessageInput{
-			Role:       msg.Role,
-			Content:    encodeMessageContent(msg.Content),
-			ToolCallID: msg.ToolCallID,
+			Role:             msg.Role,
+			Content:          encodeMessageContent(msg.Content),
+			ReasoningContent: encodeReasoningContent(msg.Content),
+			ToolCalls:        encodeMessageToolCalls(msg.ToolCalls),
+			ToolCallID:       msg.ToolCallID,
 		})
 	}
 
@@ -435,12 +437,6 @@ func encodeMessageContent(parts types.ContentParts) any {
 			if typed != nil {
 				encoded = append(encoded, chatCompletionContentPart{Type: string(types.ContentPartTypeText), Text: typed.Text})
 			}
-		case types.ThinkPart:
-			encoded = append(encoded, chatCompletionContentPart{Type: string(types.ContentPartTypeThink), Think: typed.Think})
-		case *types.ThinkPart:
-			if typed != nil {
-				encoded = append(encoded, chatCompletionContentPart{Type: string(types.ContentPartTypeThink), Think: typed.Think})
-			}
 		case types.ImageURLPart:
 			encoded = append(encoded, chatCompletionContentPart{
 				Type: string(types.ContentPartTypeImageURL),
@@ -476,6 +472,91 @@ func encodeMessageContent(parts types.ContentParts) any {
 		return ""
 	}
 	return encoded
+}
+
+func encodeMessageToolCalls(calls []types.ToolCall) []chatCompletionToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	encoded := make([]chatCompletionToolCall, 0, len(calls))
+	for i := range calls {
+		callID := strings.TrimSpace(calls[i].ID)
+		callName := strings.TrimSpace(calls[i].Name)
+		if callID == "" || callName == "" {
+			continue
+		}
+		encoded = append(encoded, chatCompletionToolCall{
+			ID:   callID,
+			Type: "function",
+			Function: chatCompletionToolFunctionCall{
+				Name:      callName,
+				Arguments: encodeToolArguments(calls[i].Arguments),
+			},
+		})
+	}
+	if len(encoded) == 0 {
+		return nil
+	}
+	return encoded
+}
+
+func encodeReasoningContent(parts types.ContentParts) string {
+	if len(parts) == 0 {
+		return ""
+	}
+
+	thinkParts := make([]string, 0, len(parts))
+	for i := range parts {
+		switch typed := parts[i].(type) {
+		case types.ThinkPart:
+			trimmed := strings.TrimSpace(typed.Think)
+			if trimmed != "" {
+				thinkParts = append(thinkParts, trimmed)
+			}
+		case *types.ThinkPart:
+			if typed == nil {
+				continue
+			}
+			trimmed := strings.TrimSpace(typed.Think)
+			if trimmed != "" {
+				thinkParts = append(thinkParts, trimmed)
+			}
+		}
+	}
+
+	return strings.Join(thinkParts, "\n")
+}
+
+func encodeToolArguments(args types.JsonType) string {
+	if args == nil {
+		return "{}"
+	}
+
+	if raw, ok := args.(string); ok {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			return "{}"
+		}
+		if json.Valid([]byte(trimmed)) {
+			return trimmed
+		}
+		encoded, err := json.Marshal(trimmed)
+		if err != nil {
+			return "{}"
+		}
+		return string(encoded)
+	}
+
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return "{}"
+	}
+	trimmed := strings.TrimSpace(string(encoded))
+	if trimmed == "" || trimmed == "null" {
+		return "{}"
+	}
+	return trimmed
 }
 
 func decodeMessageContent(raw any, reasoning string) types.ContentParts {
@@ -643,9 +724,11 @@ type chatCompletionRequest struct {
 }
 
 type chatCompletionMessageInput struct {
-	Role       string `json:"role"`
-	Content    any    `json:"content,omitempty"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
+	Role             string                   `json:"role"`
+	Content          any                      `json:"content,omitempty"`
+	ReasoningContent string                   `json:"reasoning_content,omitempty"`
+	ToolCalls        []chatCompletionToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string                   `json:"tool_call_id,omitempty"`
 }
 
 type chatCompletionContentPart struct {

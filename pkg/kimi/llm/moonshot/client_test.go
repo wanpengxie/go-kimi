@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -143,6 +144,100 @@ func TestMoonshotClientChat(t *testing.T) {
 	}
 	if got, _ := arguments["q"].(string); got != "moonshot" {
 		t.Fatalf("tool args q = %q, want %q", got, "moonshot")
+	}
+}
+
+func TestMoonshotClientChatRequestEncodesAssistantToolCallsAndSkipsThink(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if len(req.Messages) != 3 {
+			t.Fatalf("message count = %d, want 3", len(req.Messages))
+		}
+
+		assistant := req.Messages[1]
+		if assistant.Role != "assistant" {
+			t.Fatalf("assistant role = %q, want assistant", assistant.Role)
+		}
+		if len(assistant.ToolCalls) != 1 {
+			t.Fatalf("assistant tool call count = %d, want 1", len(assistant.ToolCalls))
+		}
+		call := assistant.ToolCalls[0]
+		if call.ID != "call-1" || call.Type != "function" || call.Function.Name != "search" {
+			t.Fatalf("assistant tool call = %#v, want id=call-1 type=function name=search", call)
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+			t.Fatalf("decode tool arguments %q: %v", call.Function.Arguments, err)
+		}
+		if got, _ := args["q"].(string); got != "moonshot" {
+			t.Fatalf("tool arguments q = %q, want moonshot", got)
+		}
+
+		assistantContentJSON, err := json.Marshal(assistant.Content)
+		if err != nil {
+			t.Fatalf("marshal assistant content: %v", err)
+		}
+		if strings.Contains(string(assistantContentJSON), "\"think\"") {
+			t.Fatalf("assistant content should not include think part: %s", assistantContentJSON)
+		}
+		if !strings.Contains(string(assistantContentJSON), "\"text\":\"working\"") {
+			t.Fatalf("assistant content should retain text part: %s", assistantContentJSON)
+		}
+		if assistant.ReasoningContent != "internal thought" {
+			t.Fatalf("assistant reasoning_content = %q, want %q", assistant.ReasoningContent, "internal thought")
+		}
+
+		tool := req.Messages[2]
+		if tool.Role != "tool" || tool.ToolCallID != "call-1" {
+			t.Fatalf("tool message = %#v, want role=tool tool_call_id=call-1", tool)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewMoonshotClient("test-key", server.URL+"/v1", "kimi-k2")
+	_, err := client.Chat(context.Background(), llm.ChatRequest{
+		Messages: []llm.Message{
+			{
+				Role: "user",
+				Content: types.ContentParts{
+					types.TextPart{Text: "hello"},
+				},
+			},
+			{
+				Role: "assistant",
+				Content: types.ContentParts{
+					types.ThinkPart{Think: "internal thought"},
+					types.TextPart{Text: "working"},
+				},
+				ToolCalls: []types.ToolCall{
+					{
+						ID:   "call-1",
+						Name: "search",
+						Arguments: map[string]any{
+							"q": "moonshot",
+						},
+					},
+				},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "call-1",
+				Content: types.ContentParts{
+					types.TextPart{Text: "tool output"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
 	}
 }
 

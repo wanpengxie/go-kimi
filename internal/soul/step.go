@@ -169,6 +169,7 @@ func (s *Soul) buildChatMessages() []llm.Message {
 		messages = append(messages, llm.Message{
 			Role:       string(history[i].Role),
 			Content:    cloneContentParts(history[i].Content),
+			ToolCalls:  cloneToolCalls(history[i].ToolCalls),
 			ToolCallID: strings.TrimSpace(history[i].ToolCallID),
 		})
 	}

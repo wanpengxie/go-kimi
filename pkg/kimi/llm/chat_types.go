@@ -6,6 +6,7 @@ import "github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 type Message struct {
 	Role       string             `json:"role"`
 	Content    types.ContentParts `json:"content,omitempty"`
+	ToolCalls  []types.ToolCall   `json:"tool_calls,omitempty"`
 	ToolCallID string             `json:"tool_call_id,omitempty"`
 }
 

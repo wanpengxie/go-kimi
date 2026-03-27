@@ -238,6 +238,22 @@ func TestSoulRunStopsAtMaxSteps(t *testing.T) {
 	if provider.CallCount() != 2 {
 		t.Fatalf("provider call count = %d, want 2", provider.CallCount())
 	}
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(requests))
+	}
+	if len(requests[1].Messages) != 3 {
+		t.Fatalf("second request message count = %d, want 3", len(requests[1].Messages))
+	}
+	if requests[1].Messages[1].Role != "assistant" {
+		t.Fatalf("second request assistant role = %q, want assistant", requests[1].Messages[1].Role)
+	}
+	if len(requests[1].Messages[1].ToolCalls) != 1 || requests[1].Messages[1].ToolCalls[0].ID != "call-1" {
+		t.Fatalf("second request assistant tool_calls = %#v, want one call-1", requests[1].Messages[1].ToolCalls)
+	}
+	if requests[1].Messages[2].Role != "tool" || requests[1].Messages[2].ToolCallID != "call-1" {
+		t.Fatalf("second request tool message = %#v, want role=tool tool_call_id=call-1", requests[1].Messages[2])
+	}
 	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ID != "call-2" {
 		t.Fatalf("final step tool calls = %#v, want call-2", result.ToolCalls)
 	}
