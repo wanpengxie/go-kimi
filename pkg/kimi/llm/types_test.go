@@ -1,84 +1,148 @@
 package llm
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	sharedtypes "github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
+
+type stubProvider struct {
+	modelName string
+	effort    string
+}
+
+func (s stubProvider) ModelName() string {
+	return s.modelName
+}
+
+func (s stubProvider) WithThinking(effort string) ChatProvider {
+	s.effort = effort
+	return s
+}
+
+var _ ChatProvider = stubProvider{}
 
 func TestProviderTypeConstants(t *testing.T) {
 	t.Parallel()
 
-	cases := map[ProviderType]string{
-		ProviderTypeMoonshot:    "moonshot",
-		ProviderTypeOpenAI:      "openai",
-		ProviderTypeAnthropic:   "anthropic",
-		ProviderTypeGoogle:      "google",
-		ProviderTypeAzureOpenAI: "azure_openai",
-		ProviderTypeDeepSeek:    "deepseek",
+	tests := []struct {
+		name string
+		got  ProviderType
+		want ProviderType
+	}{
+		{name: "moonshot", got: ProviderTypeMoonshot, want: "moonshot"},
+		{name: "openai", got: ProviderTypeOpenAI, want: "openai"},
+		{name: "anthropic", got: ProviderTypeAnthropic, want: "anthropic"},
+		{name: "google", got: ProviderTypeGoogle, want: "google"},
+		{name: "azure_openai", got: ProviderTypeAzureOpenAI, want: "azure_openai"},
+		{name: "deepseek", got: ProviderTypeDeepSeek, want: "deepseek"},
 	}
 
-	for got, want := range cases {
-		if string(got) != want {
-			t.Fatalf("provider constant = %q, want %q", got, want)
-		}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if tc.got != tc.want {
+				t.Fatalf("provider type = %q, want %q", tc.got, tc.want)
+			}
+		})
 	}
 }
 
 func TestModelCapabilityConstants(t *testing.T) {
 	t.Parallel()
 
-	cases := map[ModelCapability]string{
-		ModelCapabilityReasoning:  "reasoning",
-		ModelCapabilityToolCall:   "tool_call",
-		ModelCapabilityVision:     "vision",
-		ModelCapabilityAudioInput: "audio_input",
-		ModelCapabilityVideoInput: "video_input",
-		ModelCapabilityJSONMode:   "json_mode",
-		ModelCapabilityLongCtx:    "long_context",
+	tests := []struct {
+		name string
+		got  ModelCapability
+		want ModelCapability
+	}{
+		{name: "reasoning", got: ModelCapabilityReasoning, want: "reasoning"},
+		{name: "tool_call", got: ModelCapabilityToolCall, want: "tool_call"},
+		{name: "vision", got: ModelCapabilityVision, want: "vision"},
+		{name: "audio_input", got: ModelCapabilityAudioInput, want: "audio_input"},
+		{name: "video_input", got: ModelCapabilityVideoInput, want: "video_input"},
+		{name: "json_mode", got: ModelCapabilityJSONMode, want: "json_mode"},
+		{name: "long_context", got: ModelCapabilityLongCtx, want: "long_context"},
 	}
 
-	for got, want := range cases {
-		if string(got) != want {
-			t.Fatalf("capability constant = %q, want %q", got, want)
-		}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if tc.got != tc.want {
+				t.Fatalf("model capability = %q, want %q", tc.got, tc.want)
+			}
+		})
 	}
 }
 
-func TestDeriveModelCapabilitiesUsesExplicitValues(t *testing.T) {
+func TestLLMStruct(t *testing.T) {
+	t.Parallel()
+
+	provider := stubProvider{modelName: "kimi-k2"}
+	capabilities := map[ModelCapability]bool{
+		ModelCapabilityReasoning: true,
+		ModelCapabilityToolCall:  true,
+	}
+
+	model := LLM{
+		ChatProvider:   provider,
+		MaxContextSize: 128000,
+		Capabilities:   capabilities,
+	}
+
+	if model.ChatProvider.ModelName() != "kimi-k2" {
+		t.Fatalf("ChatProvider.ModelName() = %q, want %q", model.ChatProvider.ModelName(), "kimi-k2")
+	}
+	if model.MaxContextSize != 128000 {
+		t.Fatalf("MaxContextSize = %d, want %d", model.MaxContextSize, 128000)
+	}
+	if !model.Capabilities[ModelCapabilityReasoning] {
+		t.Fatal("reasoning capability should be true")
+	}
+	if !model.Capabilities[ModelCapabilityToolCall] {
+		t.Fatal("tool_call capability should be true")
+	}
+}
+
+func TestDeriveModelCapabilitiesFromExplicitModelCapabilities(t *testing.T) {
 	t.Parallel()
 
 	model := config.LLMModel{
-		Name:          "custom",
-		ContextWindow: 32768,
-		Capabilities: []sharedtypes.ModelCapability{
-			sharedtypes.ModelCapabilityReasoning,
-			sharedtypes.ModelCapabilityToolCall,
-			"function_calling",
-			"CUSTOM_CAP",
+		Name:          "kimi-k2-vision",
+		ContextWindow: 32000,
+		Capabilities: []types.ModelCapability{
+			" reasoning ",
+			"tool-call",
+			"json",
+			"custom_capability",
 			"",
+			"   ",
 		},
 	}
 
 	got := DeriveModelCapabilities(model)
+
 	want := map[ModelCapability]bool{
-		ModelCapabilityReasoning:      true,
-		ModelCapabilityToolCall:       true,
-		ModelCapability("custom_cap"): true,
+		ModelCapabilityReasoning:          true,
+		ModelCapabilityToolCall:           true,
+		ModelCapabilityJSONMode:           true,
+		ModelCapability("custom_capability"): true,
 	}
 
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("DeriveModelCapabilities() = %#v, want %#v", got, want)
+	assertCapabilitySet(t, got, want)
+	if got[ModelCapabilityVision] {
+		t.Fatal("vision should not be auto-derived when explicit capabilities are present")
 	}
 }
 
-func TestDeriveModelCapabilitiesFallsBackToHeuristics(t *testing.T) {
+func TestDeriveModelCapabilitiesHeuristics(t *testing.T) {
 	t.Parallel()
 
 	model := config.LLMModel{
-		Name:          "kimi-k2-vision-json-audio-video",
+		Name:          "kimi-k2-vision-audio-video-json",
 		ContextWindow: 128000,
 	}
 
@@ -93,30 +157,27 @@ func TestDeriveModelCapabilitiesFallsBackToHeuristics(t *testing.T) {
 		ModelCapabilityLongCtx:    true,
 	}
 
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("DeriveModelCapabilities() = %#v, want %#v", got, want)
-	}
+	assertCapabilitySet(t, got, want)
 }
 
-func TestDeriveModelCapabilitiesAddsLongContextFromContextWindow(t *testing.T) {
+func TestDeriveModelCapabilitiesLongContextFromContextWindow(t *testing.T) {
 	t.Parallel()
 
 	model := config.LLMModel{
-		Name:          "reason-only",
-		ContextWindow: 256000,
-		Capabilities: []sharedtypes.ModelCapability{
-			sharedtypes.ModelCapabilityReasoning,
+		Name:          "moonshot-v1",
+		ContextWindow: 128000,
+		Capabilities: []types.ModelCapability{
+			"tool_call",
 		},
 	}
 
 	got := DeriveModelCapabilities(model)
-	want := map[ModelCapability]bool{
-		ModelCapabilityReasoning: true,
-		ModelCapabilityLongCtx:   true,
-	}
 
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("DeriveModelCapabilities() = %#v, want %#v", got, want)
+	if !got[ModelCapabilityLongCtx] {
+		t.Fatal("long_context should be derived when context_window >= 128000")
+	}
+	if !got[ModelCapabilityToolCall] {
+		t.Fatal("tool_call should stay in capability set")
 	}
 }
 
@@ -136,26 +197,48 @@ func TestModelDisplayName(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		input string
-		want  string
+		name     string
+		model    string
+		expected string
 	}{
-		{name: "empty", input: "", want: ""},
-		{name: "blank", input: "   ", want: ""},
-		{name: "kebab", input: "kimi-k2", want: "Kimi K2"},
-		{name: "snake", input: " kimi_k2_vision ", want: "Kimi K2 Vision"},
-		{name: "slash", input: "moonshot/v1", want: "Moonshot V1"},
-		{name: "mixed", input: "gpt-4o-mini", want: "GPT 4O Mini"},
+		{
+			name:     "empty",
+			model:    "  ",
+			expected: "",
+		},
+		{
+			name:     "mixed separators",
+			model:    " kimi-k2_vl/reason ",
+			expected: "Kimi K2 VL Reason",
+		},
+		{
+			name:     "short token uppercased",
+			model:    "gpt-o1",
+			expected: "GPT O1",
+		},
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			if got := ModelDisplayName(tc.input); got != tc.want {
-				t.Fatalf("ModelDisplayName(%q) = %q, want %q", tc.input, got, tc.want)
+			got := ModelDisplayName(tc.model)
+			if got != tc.expected {
+				t.Fatalf("ModelDisplayName(%q) = %q, want %q", tc.model, got, tc.expected)
 			}
 		})
+	}
+}
+
+func assertCapabilitySet(t *testing.T, got map[ModelCapability]bool, want map[ModelCapability]bool) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("capability set size = %d, want %d: got=%v", len(got), len(want), got)
+	}
+	for capability := range want {
+		if !got[capability] {
+			t.Fatalf("expected capability %q in set: got=%v", capability, got)
+		}
 	}
 }
