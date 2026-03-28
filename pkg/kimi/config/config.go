@@ -16,6 +16,7 @@ import (
 const (
 	defaultMaxTurns            = 20
 	defaultMaxToolCallsPerTurn = 8
+	defaultMaxRetriesPerStep   = 3
 
 	defaultBackgroundMaxParallelTasks = 4
 	defaultBackgroundTaskTimeoutSec   = 300
@@ -23,6 +24,9 @@ const (
 	defaultServiceTimeoutSec   = 30
 	defaultSearchMaxResults    = 8
 	defaultFetchMaxContentByte = 2 * 1024 * 1024
+
+	defaultDefaultThinking = "off"
+	defaultDefaultYolo     = true
 )
 
 // OAuthRef references an OAuth account.
@@ -31,11 +35,27 @@ type OAuthRef struct {
 	AccountID string `toml:"account_id" json:"account_id"`
 }
 
+// SecretStr stores sensitive string values while redacting String() output.
+type SecretStr string
+
+// Raw returns the plain underlying value.
+func (s SecretStr) Raw() string {
+	return string(s)
+}
+
+// String redacts sensitive values for fmt/log output.
+func (s SecretStr) String() string {
+	if strings.TrimSpace(string(s)) == "" {
+		return ""
+	}
+	return "[REDACTED]"
+}
+
 // LLMProvider defines a provider endpoint and credentials.
 type LLMProvider struct {
 	Name    string    `toml:"name" json:"name"`
 	Type    string    `toml:"type" json:"type"`
-	APIKey  string    `toml:"api_key,omitempty" json:"api_key,omitempty"`
+	APIKey  SecretStr `toml:"api_key,omitempty" json:"api_key,omitempty"`
 	BaseURL string    `toml:"base_url,omitempty" json:"base_url,omitempty"`
 	OAuth   *OAuthRef `toml:"oauth,omitempty" json:"oauth,omitempty"`
 }
@@ -53,6 +73,7 @@ type LLMModel struct {
 type LoopControl struct {
 	MaxTurns            int `toml:"max_turns" json:"max_turns"`
 	MaxToolCallsPerTurn int `toml:"max_tool_calls_per_turn" json:"max_tool_calls_per_turn"`
+	MaxRetriesPerStep   int `toml:"max_retries_per_step" json:"max_retries_per_step"`
 }
 
 // Validate validates loop control constraints.
@@ -62,6 +83,9 @@ func (c LoopControl) Validate() error {
 	}
 	if c.MaxToolCallsPerTurn < 1 {
 		return errors.New("loop.max_tool_calls_per_turn must be >= 1")
+	}
+	if c.MaxRetriesPerStep < 0 {
+		return errors.New("loop.max_retries_per_step must be >= 0")
 	}
 	return nil
 }
@@ -190,6 +214,8 @@ type Config struct {
 	Models          []LLMModel         `toml:"models" json:"models"`
 	DefaultProvider string             `toml:"default_provider,omitempty" json:"default_provider,omitempty"`
 	DefaultModel    string             `toml:"default_model,omitempty" json:"default_model,omitempty"`
+	DefaultThinking string             `toml:"default_thinking,omitempty" json:"default_thinking,omitempty"`
+	DefaultYolo     bool               `toml:"default_yolo" json:"default_yolo"`
 	Loop            LoopControl        `toml:"loop" json:"loop"`
 	Background      BackgroundConfig   `toml:"background" json:"background"`
 	Notification    NotificationConfig `toml:"notification" json:"notification"`
@@ -202,6 +228,7 @@ func NewDefaultLoopControl() LoopControl {
 	return LoopControl{
 		MaxTurns:            defaultMaxTurns,
 		MaxToolCallsPerTurn: defaultMaxToolCallsPerTurn,
+		MaxRetriesPerStep:   defaultMaxRetriesPerStep,
 	}
 }
 
@@ -270,6 +297,8 @@ func NewDefaultConfig() Config {
 		},
 		DefaultProvider: "moonshot",
 		DefaultModel:    "kimi-k2",
+		DefaultThinking: defaultDefaultThinking,
+		DefaultYolo:     defaultDefaultYolo,
 		Loop:            NewDefaultLoopControl(),
 		Background:      NewDefaultBackgroundConfig(),
 		Notification:    NewDefaultNotificationConfig(),
@@ -292,6 +321,24 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("load config %q: %w", path, err)
 	}
 	return config, nil
+}
+
+// LoadConfigWithEnv loads config from path and then applies environment overrides.
+func LoadConfigWithEnv(path string) (Config, error) {
+	config, err := LoadConfig(path)
+	if err != nil {
+		return Config{}, err
+	}
+	ApplyEnvOverrides(&config)
+	if err := config.Validate(); err != nil {
+		return Config{}, fmt.Errorf("load config with env %q: %w", path, err)
+	}
+	return config, nil
+}
+
+// ApplyEnvOverrides applies environment-variable overrides in-place.
+func ApplyEnvOverrides(config *Config) {
+	applyEnvOverrides(config, os.LookupEnv)
 }
 
 // SaveConfig validates and writes config as TOML.
@@ -413,5 +460,58 @@ func (c Config) Validate() error {
 		}
 	}
 
+	switch strings.ToLower(strings.TrimSpace(c.DefaultThinking)) {
+	case "", "off", "low", "medium", "high":
+	default:
+		return fmt.Errorf("default_thinking %q is invalid", c.DefaultThinking)
+	}
+
 	return nil
+}
+
+type lookupEnvFunc func(key string) (string, bool)
+
+func applyEnvOverrides(config *Config, lookup lookupEnvFunc) {
+	if config == nil || lookup == nil {
+		return
+	}
+
+	for i := range config.Providers {
+		envKey := providerAPIKeyEnvKey(config.Providers[i].Type)
+		if envKey == "" {
+			continue
+		}
+		value, ok := lookup(envKey)
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		config.Providers[i].APIKey = SecretStr(value)
+	}
+}
+
+func providerAPIKeyEnvKey(providerType string) string {
+	switch normalizeProviderType(providerType) {
+	case "moonshot", "kimi":
+		return "KIMI_API_KEY"
+	case "openai":
+		return "OPENAI_API_KEY"
+	case "anthropic":
+		return "ANTHROPIC_API_KEY"
+	case "gemini", "google":
+		return "GEMINI_API_KEY"
+	case "azure_openai":
+		return "AZURE_OPENAI_API_KEY"
+	case "deepseek":
+		return "DEEPSEEK_API_KEY"
+	default:
+		return ""
+	}
+}
+
+func normalizeProviderType(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
 }

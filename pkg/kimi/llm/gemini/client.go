@@ -73,7 +73,7 @@ func NewGeminiClient(apiKey, baseURL, model string) *GeminiClient {
 
 // NewGeminiClientFromConfig builds a Gemini client from provider/model config.
 func NewGeminiClientFromConfig(provider config.LLMProvider, model config.LLMModel) *GeminiClient {
-	return NewGeminiClient(provider.APIKey, provider.BaseURL, model.Name)
+	return NewGeminiClient(provider.APIKey.Raw(), provider.BaseURL, model.Name)
 }
 
 // ModelName returns the configured model identifier.

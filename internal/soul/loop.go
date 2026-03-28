@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
@@ -102,6 +103,13 @@ func (s *Soul) run(ctx context.Context, input types.ContentParts) (StepResult, e
 		return StepResult{}, err
 	}
 
+	if stopReason == "max_steps" && len(finalResult.ToolCalls) > 0 {
+		return finalResult, errors.Join(
+			kimierrors.ErrMaxStepsReached,
+			fmt.Errorf("soul run: reached max steps limit %d", s.maxSteps),
+		)
+	}
+
 	return finalResult, nil
 }
 
@@ -170,10 +178,16 @@ func (s *Soul) stepWithRetry(ctx context.Context, turnID string, stepIndex int) 
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return StepResult{}, ctx.Err()
+			return StepResult{}, errors.Join(kimierrors.ErrRunCancelled, ctx.Err())
 		}
 	}
-	return StepResult{}, fmt.Errorf("soul run: step %d failed after %d retries: %w", stepIndex, cfg.MaxRetries, lastErr)
+	if errors.Is(lastErr, context.Canceled) || errors.Is(lastErr, context.DeadlineExceeded) {
+		return StepResult{}, errors.Join(kimierrors.ErrRunCancelled, lastErr)
+	}
+	return StepResult{}, errors.Join(
+		kimierrors.ErrStepFailed,
+		fmt.Errorf("soul run: step %d failed after %d retries: %w", stepIndex, cfg.MaxRetries, lastErr),
+	)
 }
 
 func shouldRetryStepError(err error) bool {

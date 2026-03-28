@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-
-	"github.com/xiewanpeng/go-kimi/pkg/kimi"
 )
 
 const (
 	defaultMCPProtocolVersion = "2026-03-26"
 	defaultMCPClientName      = "go-kimi"
+	defaultMCPClientVersion   = "0.0.0-dev"
 )
 
 // MCPClient implements MCP protocol handshake, tool discovery, and tool calls.
@@ -114,7 +113,7 @@ func (c *MCPClient) Initialize(ctx context.Context) error {
 		Capabilities:    map[string]any{},
 		ClientInfo: ClientInfo{
 			Name:    defaultMCPClientName,
-			Version: kimi.Version,
+			Version: defaultMCPClientVersion,
 		},
 	})
 	if err != nil {

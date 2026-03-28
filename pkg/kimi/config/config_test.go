@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
@@ -25,6 +24,15 @@ func TestNewDefaultConfig(t *testing.T) {
 	}
 	if cfg.Loop.MaxTurns != defaultMaxTurns {
 		t.Fatalf("Loop.MaxTurns = %d, want %d", cfg.Loop.MaxTurns, defaultMaxTurns)
+	}
+	if cfg.Loop.MaxRetriesPerStep != defaultMaxRetriesPerStep {
+		t.Fatalf("Loop.MaxRetriesPerStep = %d, want %d", cfg.Loop.MaxRetriesPerStep, defaultMaxRetriesPerStep)
+	}
+	if cfg.DefaultThinking != defaultDefaultThinking {
+		t.Fatalf("DefaultThinking = %q, want %q", cfg.DefaultThinking, defaultDefaultThinking)
+	}
+	if cfg.DefaultYolo != defaultDefaultYolo {
+		t.Fatalf("DefaultYolo = %v, want %v", cfg.DefaultYolo, defaultDefaultYolo)
 	}
 	if cfg.Background.TaskTimeoutSecond != defaultBackgroundTaskTimeoutSec {
 		t.Fatalf("Background.TaskTimeoutSecond = %d, want %d", cfg.Background.TaskTimeoutSecond, defaultBackgroundTaskTimeoutSec)
@@ -122,6 +130,14 @@ func TestConfigValidateErrors(t *testing.T) {
 				return c
 			},
 			wantSubstr: "loop.max_turns",
+		},
+		{
+			name: "invalid loop max retries per step",
+			mutate: func(c Config) Config {
+				c.Loop.MaxRetriesPerStep = -1
+				return c
+			},
+			wantSubstr: "loop.max_retries_per_step",
 		},
 		{
 			name: "invalid background timeout",
@@ -283,6 +299,14 @@ func TestConfigValidateErrors(t *testing.T) {
 			},
 			wantSubstr: "oauth.account_id",
 		},
+		{
+			name: "invalid default thinking",
+			mutate: func(c Config) Config {
+				c.DefaultThinking = "ultra"
+				return c
+			},
+			wantSubstr: "default_thinking",
+		},
 	}
 
 	for _, tc := range tests {
@@ -321,6 +345,55 @@ func TestLoadConfigErrors(t *testing.T) {
 	}
 }
 
+func TestLoadConfigWithEnvOverridesProviderAPIKeys(t *testing.T) {
+	cfg := NewDefaultConfig()
+	cfg.Providers = append(cfg.Providers, LLMProvider{
+		Name:    "openai",
+		Type:    "openai",
+		BaseURL: "https://api.openai.com/v1",
+	})
+	cfg.Models = append(cfg.Models, LLMModel{
+		Name:     "gpt-4.1",
+		Provider: "openai",
+	})
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	t.Setenv("KIMI_API_KEY", "env-kimi-key")
+	t.Setenv("OPENAI_API_KEY", "env-openai-key")
+
+	loaded, err := LoadConfigWithEnv(path)
+	if err != nil {
+		t.Fatalf("LoadConfigWithEnv() error = %v", err)
+	}
+
+	byName := make(map[string]LLMProvider, len(loaded.Providers))
+	for i := range loaded.Providers {
+		byName[loaded.Providers[i].Name] = loaded.Providers[i]
+	}
+	if got := byName["moonshot"].APIKey.Raw(); got != "env-kimi-key" {
+		t.Fatalf("moonshot APIKey = %q, want env-kimi-key", got)
+	}
+	if got := byName["openai"].APIKey.Raw(); got != "env-openai-key" {
+		t.Fatalf("openai APIKey = %q, want env-openai-key", got)
+	}
+}
+
+func TestSecretStrStringRedacts(t *testing.T) {
+	t.Parallel()
+
+	secret := SecretStr("top-secret")
+	if got := secret.String(); got != "[REDACTED]" {
+		t.Fatalf("SecretStr.String() = %q, want [REDACTED]", got)
+	}
+	if got := secret.Raw(); got != "top-secret" {
+		t.Fatalf("SecretStr.Raw() = %q, want top-secret", got)
+	}
+}
+
 func TestSaveConfigErrors(t *testing.T) {
 	t.Parallel()
 
@@ -350,10 +423,6 @@ func TestSaveConfigErrors(t *testing.T) {
 
 func TestCrossPackageCoverageScenarioFromConfig(t *testing.T) {
 	t.Parallel()
-
-	if kimi.Version == "" {
-		t.Fatal("kimi.Version must not be empty")
-	}
 
 	cfg := NewDefaultConfig()
 	if err := cfg.Validate(); err != nil {

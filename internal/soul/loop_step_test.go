@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
@@ -232,8 +233,8 @@ func TestSoulRunStopsAtMaxSteps(t *testing.T) {
 	result, err := s.Run(context.Background(), types.ContentParts{
 		types.TextPart{Text: "loop"},
 	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+	if !errors.Is(err, kimierrors.ErrMaxStepsReached) {
+		t.Fatalf("Run() error = %v, want ErrMaxStepsReached", err)
 	}
 	if provider.CallCount() != 2 {
 		t.Fatalf("provider call count = %d, want 2", provider.CallCount())

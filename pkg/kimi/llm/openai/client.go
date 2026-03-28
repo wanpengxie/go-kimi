@@ -65,7 +65,7 @@ func NewOpenAIClient(apiKey, baseURL, model string) *OpenAIClient {
 
 // NewOpenAIClientFromConfig builds an OpenAI client from provider/model config.
 func NewOpenAIClientFromConfig(provider config.LLMProvider, model config.LLMModel) *OpenAIClient {
-	return NewOpenAIClient(provider.APIKey, provider.BaseURL, model.Name)
+	return NewOpenAIClient(provider.APIKey.Raw(), provider.BaseURL, model.Name)
 }
 
 // ModelName returns the configured model identifier.

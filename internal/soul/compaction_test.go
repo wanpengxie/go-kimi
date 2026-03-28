@@ -273,6 +273,78 @@ func TestSoulRunCompactionSummaryFailureIsFailOpen(t *testing.T) {
 	}
 }
 
+func TestSoulManualCompact(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Delta: types.TextPart{Text: "assistant output"}},
+				{Done: true},
+			},
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	engine := NewSoul(provider, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "")
+	engine.SetCompactionConfig(CompactionConfig{
+		Enabled:        false,
+		TriggerRatio:   0.95,
+		MaxContextSize: 1000,
+	})
+
+	if _, err := engine.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "manual compact"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	compacted := false
+	engine.SetCompactor(compactorFunc(func(_ context.Context, messages []Message, _ llm.ChatProvider) (CompactionResult, error) {
+		compacted = true
+		return CompactionResult{
+			Messages: []Message{
+				{
+					Role:    RoleSystem,
+					Content: types.ContentParts{types.TextPart{Text: "manual summary"}},
+				},
+			},
+		}, nil
+	}))
+
+	if err := engine.Compact(context.Background()); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	if !compacted {
+		t.Fatal("manual Compact() did not invoke compactor")
+	}
+
+	messages := ctxStore.Messages()
+	if len(messages) != 1 {
+		t.Fatalf("context message count = %d, want 1", len(messages))
+	}
+	if messages[0].Role != RoleSystem {
+		t.Fatalf("messages[0].Role = %q, want system", messages[0].Role)
+	}
+	if got := contentPartsText(messages[0].Content); got != "manual summary" {
+		t.Fatalf("manual summary = %q, want manual summary", got)
+	}
+
+	events := drainWireMessages(wireCh)
+	hasManualBegin := false
+	for i := range events {
+		begin, ok := events[i].(wire.CompactionBegin)
+		if ok && begin.Trigger == "manual" {
+			hasManualBegin = true
+			break
+		}
+	}
+	if !hasManualBegin {
+		t.Fatalf("wire events missing manual compaction begin: %#v", events)
+	}
+}
+
 func TestCompactionBoundaryCountsUserAndAssistant(t *testing.T) {
 	t.Parallel()
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
+	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
@@ -330,7 +331,7 @@ func (s *Soul) ensureReady() error {
 		return errors.New("soul: nil")
 	}
 	if s.provider == nil {
-		return errors.New("soul: nil provider")
+		return kimierrors.ErrLLMNotConfigured
 	}
 	if s.context == nil {
 		return errors.New("soul: nil context")

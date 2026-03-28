@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
@@ -15,10 +14,6 @@ import (
 
 func TestCrossPackageCoverageScenarioFromWire(t *testing.T) {
 	t.Parallel()
-
-	if kimi.Version == "" {
-		t.Fatal("kimi.Version must not be empty")
-	}
 
 	cfg := config.NewDefaultConfig()
 	if err := cfg.Validate(); err != nil {

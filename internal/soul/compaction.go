@@ -149,7 +149,47 @@ func (s *Soul) postStepCompaction(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.emit(wire.CompactionBegin{Trigger: "token_limit"}); err != nil {
+	return s.compactMessages(ctx, "token_limit", messages, cfg)
+}
+
+// Compact triggers one manual compaction attempt immediately.
+func (s *Soul) Compact(ctx context.Context) error {
+	if s == nil {
+		return errors.New("soul compaction: nil soul")
+	}
+	if err := s.ensureReady(); err != nil {
+		return err
+	}
+	if s.context == nil {
+		return errors.New("soul compaction: nil context")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	messages := s.context.Messages()
+	if len(messages) == 0 {
+		return nil
+	}
+	tokenCount := estimateContextTokens(messages)
+	s.context.UpdateTokenCount(tokenCount)
+
+	cfg := normalizeCompactionConfig(s.compaction)
+	s.compaction = cfg
+	if s.compactor == nil {
+		return errors.New("soul compaction: nil compactor")
+	}
+
+	return s.compactMessages(ctx, "manual", messages, cfg)
+}
+
+func (s *Soul) compactMessages(
+	ctx context.Context,
+	trigger string,
+	messages []Message,
+	cfg CompactionConfig,
+) error {
+	if err := s.emit(wire.CompactionBegin{Trigger: trigger}); err != nil {
 		return err
 	}
 

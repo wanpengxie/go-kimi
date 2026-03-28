@@ -77,7 +77,7 @@ func NewAnthropicClient(apiKey, baseURL, model string) *AnthropicClient {
 
 // NewAnthropicClientFromConfig builds an Anthropic client from provider/model config.
 func NewAnthropicClientFromConfig(provider config.LLMProvider, model config.LLMModel) *AnthropicClient {
-	return NewAnthropicClient(provider.APIKey, provider.BaseURL, model.Name)
+	return NewAnthropicClient(provider.APIKey.Raw(), provider.BaseURL, model.Name)
 }
 
 // ModelName returns the configured model identifier.

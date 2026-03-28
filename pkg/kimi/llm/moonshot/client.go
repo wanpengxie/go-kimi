@@ -66,7 +66,7 @@ func NewMoonshotClient(apiKey, baseURL, model string) *MoonshotClient {
 
 // NewMoonshotClientFromConfig builds a Moonshot client from provider/model config.
 func NewMoonshotClientFromConfig(provider config.LLMProvider, model config.LLMModel) *MoonshotClient {
-	return NewMoonshotClient(provider.APIKey, provider.BaseURL, model.Name)
+	return NewMoonshotClient(provider.APIKey.Raw(), provider.BaseURL, model.Name)
 }
 
 // ModelName returns the configured model identifier.
