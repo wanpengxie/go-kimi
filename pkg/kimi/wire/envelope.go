@@ -23,6 +23,7 @@ var wireMessageDecoders = map[WireMessageType]wireMessageDecoder{
 	WireMessageTypeStepBegin:       decodeWireMessage[StepBegin],
 	WireMessageTypeStepInterrupted: decodeWireMessage[StepInterrupted],
 	WireMessageTypeCompactionBegin: decodeWireMessage[CompactionBegin],
+	WireMessageTypeCompactionError: decodeWireMessage[CompactionError],
 	WireMessageTypeCompactionEnd:   decodeWireMessage[CompactionEnd],
 	WireMessageTypeMCPLoadingBegin: decodeWireMessage[MCPLoadingBegin],
 	WireMessageTypeMCPLoadingEnd:   decodeWireMessage[MCPLoadingEnd],

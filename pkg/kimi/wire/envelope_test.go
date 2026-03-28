@@ -17,6 +17,7 @@ var (
 	_ Event       = StepBegin{}
 	_ Event       = StepInterrupted{}
 	_ Event       = CompactionBegin{}
+	_ Event       = CompactionError{}
 	_ Event       = CompactionEnd{}
 	_ Event       = MCPLoadingBegin{}
 	_ Event       = MCPLoadingEnd{}
@@ -122,6 +123,13 @@ func TestSerializeDeserializeWireMessageRoundTripAllTypes(t *testing.T) {
 				Trigger: "token_limit",
 			},
 			wantType: WireMessageTypeCompactionBegin,
+		},
+		{
+			name: "compaction_error",
+			message: CompactionError{
+				Error: "summary backend unavailable",
+			},
+			wantType: WireMessageTypeCompactionError,
 		},
 		{
 			name: "compaction_end",
@@ -369,6 +377,7 @@ func TestWireMessageRegistryCompleteness(t *testing.T) {
 		WireMessageTypeStepBegin,
 		WireMessageTypeStepInterrupted,
 		WireMessageTypeCompactionBegin,
+		WireMessageTypeCompactionError,
 		WireMessageTypeCompactionEnd,
 		WireMessageTypeMCPLoadingBegin,
 		WireMessageTypeMCPLoadingEnd,

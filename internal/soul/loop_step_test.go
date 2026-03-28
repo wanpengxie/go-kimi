@@ -476,6 +476,7 @@ func TestSoulStepApprovalRejectSkipsExecutor(t *testing.T) {
 
 type scriptedChatProvider struct {
 	streams [][]llm.ChatEvent
+	chatErr error
 
 	mu       sync.Mutex
 	requests []llm.ChatRequest
@@ -495,6 +496,12 @@ func (p *scriptedChatProvider) WithThinking(_ string) llm.ChatProvider {
 }
 
 func (p *scriptedChatProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.mu.Lock()
+	chatErr := p.chatErr
+	p.mu.Unlock()
+	if chatErr != nil {
+		return nil, chatErr
+	}
 	return &llm.ChatResponse{}, nil
 }
 

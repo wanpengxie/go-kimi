@@ -13,6 +13,7 @@ const (
 	WireMessageTypeStepBegin       WireMessageType = "step_begin"
 	WireMessageTypeStepInterrupted WireMessageType = "step_interrupted"
 	WireMessageTypeCompactionBegin WireMessageType = "compaction_begin"
+	WireMessageTypeCompactionError WireMessageType = "compaction_error"
 	WireMessageTypeCompactionEnd   WireMessageType = "compaction_end"
 	WireMessageTypeMCPLoadingBegin WireMessageType = "mcp_loading_begin"
 	WireMessageTypeMCPLoadingEnd   WireMessageType = "mcp_loading_end"
@@ -145,6 +146,17 @@ func (CompactionBegin) IsEvent() {}
 
 func (CompactionBegin) wireMessageType() WireMessageType {
 	return WireMessageTypeCompactionBegin
+}
+
+// CompactionError signals one recoverable context compaction failure.
+type CompactionError struct {
+	Error string `json:"error,omitempty"`
+}
+
+func (CompactionError) IsEvent() {}
+
+func (CompactionError) wireMessageType() WireMessageType {
+	return WireMessageTypeCompactionError
 }
 
 // CompactionEnd signals context compaction completion.

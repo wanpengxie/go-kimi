@@ -221,6 +221,7 @@ func TestWireMarkerMethodsAreCallable(t *testing.T) {
 		StepBegin{},
 		StepInterrupted{},
 		CompactionBegin{},
+		CompactionError{},
 		CompactionEnd{},
 		MCPLoadingBegin{},
 		MCPLoadingEnd{},

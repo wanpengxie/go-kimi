@@ -2,6 +2,7 @@ package soul
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -201,6 +202,73 @@ func TestSoulRunAutoCompactionAfterStep(t *testing.T) {
 	}
 	if !hasBegin || !hasEnd {
 		t.Fatalf("compaction events missing: begin=%v end=%v events=%#v", hasBegin, hasEnd, events)
+	}
+}
+
+func TestSoulRunCompactionSummaryFailureIsFailOpen(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Delta: types.TextPart{Text: "assistant output"}},
+				{Done: true},
+			},
+		},
+		chatErr: errors.New("summary backend unavailable"),
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	engine := NewSoul(provider, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "")
+	engine.SetCompactionConfig(CompactionConfig{
+		Enabled:        true,
+		TriggerRatio:   0.2,
+		MaxContextSize: 10,
+		ReservedSize:   0,
+	})
+	engine.SetCompactor(&SimpleCompaction{PreserveLastN: -1})
+
+	result, err := engine.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: strings.Repeat("x", 64)},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := contentPartsText(result.Content); got != "assistant output" {
+		t.Fatalf("result content = %q, want %q", got, "assistant output")
+	}
+
+	messages := ctxStore.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("context message count = %d, want 2", len(messages))
+	}
+	if messages[0].Role != RoleUser || messages[1].Role != RoleAssistant {
+		t.Fatalf("context roles = %#v, want [user assistant]", []Role{messages[0].Role, messages[1].Role})
+	}
+
+	events := drainWireMessages(wireCh)
+	hasTurnEnd := false
+	hasCompactionError := false
+	for i := range events {
+		switch typed := events[i].(type) {
+		case wire.CompactionError:
+			hasCompactionError = true
+			if !strings.Contains(typed.Error, "summary backend unavailable") {
+				t.Fatalf("CompactionError.Error = %q, want includes summary backend unavailable", typed.Error)
+			}
+		case wire.TurnEnd:
+			hasTurnEnd = true
+			if typed.StopReason != "stop" {
+				t.Fatalf("TurnEnd.StopReason = %q, want stop", typed.StopReason)
+			}
+		}
+	}
+	if !hasCompactionError {
+		t.Fatalf("wire events missing CompactionError: %#v", events)
+	}
+	if !hasTurnEnd {
+		t.Fatalf("wire events missing TurnEnd: %#v", events)
 	}
 }
 

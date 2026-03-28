@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -69,7 +70,7 @@ func (s *Soul) run(ctx context.Context, input types.ContentParts) (StepResult, e
 		}
 
 		if err := s.postStepCompaction(ctx); err != nil {
-			return StepResult{}, fmt.Errorf("soul run: post-step compaction: %w", err)
+			s.handleCompactionFailure(err)
 		}
 
 		if len(stepResult.ToolCalls) == 0 {
@@ -123,4 +124,17 @@ func usagePtr(usage types.TokenUsage) *types.TokenUsage {
 
 func newTurnID() string {
 	return fmt.Sprintf("turn-%d", time.Now().UTC().UnixNano())
+}
+
+func (s *Soul) handleCompactionFailure(err error) {
+	if err == nil {
+		return
+	}
+
+	log.Printf("WARN soul run: post-step compaction failed: %v", err)
+	if emitErr := s.emit(wire.CompactionError{
+		Error: err.Error(),
+	}); emitErr != nil {
+		log.Printf("WARN soul run: emit compaction error event failed: %v", emitErr)
+	}
 }
