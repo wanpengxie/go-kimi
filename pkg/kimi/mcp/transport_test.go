@@ -48,6 +48,35 @@ func TestStdioTransportSendSuccess(t *testing.T) {
 	}
 }
 
+func TestStdioTransportSendSuccessWithZeroResponseID(t *testing.T) {
+	t.Parallel()
+
+	transport := newTestStdioTransport(t, "success")
+	t.Cleanup(func() {
+		if err := transport.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	atomic.StoreInt64(&transport.nextID, -1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	result, err := transport.Send(ctx, "tools/list", map[string]any{"cursor": "c0"})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal(result) error = %v", err)
+	}
+	if ok, _ := decoded["ok"].(bool); !ok {
+		t.Fatalf("result.ok = %#v, want true", decoded["ok"])
+	}
+}
+
 func TestStdioTransportSendRPCError(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +209,67 @@ func TestSSETransportSendSuccess(t *testing.T) {
 	}
 	if string(result) != `{"ok":true}` {
 		t.Fatalf("result = %s, want %s", string(result), `{"ok":true}`)
+	}
+}
+
+func TestSSETransportSendJSONSuccessWithZeroResponseID(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req Request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, "{\"jsonrpc\":\"2.0\",\"id\":%d,\"result\":{\"ok\":true}}", req.ID)
+	}))
+	defer server.Close()
+
+	transport, err := NewSSETransport(server.URL, nil)
+	if err != nil {
+		t.Fatalf("NewSSETransport() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := transport.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	atomic.StoreInt64(&transport.nextID, -1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	result, err := transport.Send(ctx, "initialize", map[string]any{"protocolVersion": "2026-03-26"})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if string(result) != `{"ok":true}` {
+		t.Fatalf("result = %s, want %s", string(result), `{"ok":true}`)
+	}
+}
+
+func TestParseSSEResponseAcceptsZeroResponseID(t *testing.T) {
+	t.Parallel()
+
+	body := strings.NewReader(strings.Join([]string{
+		`data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"value":1}}`,
+		``,
+		`data: {"jsonrpc":"2.0","id":0,"result":{"ok":true}}`,
+		``,
+	}, "\n"))
+
+	result, err := parseSSEResponse(body, 0)
+	if err != nil {
+		t.Fatalf("parseSSEResponse() error = %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal(result) error = %v", err)
+	}
+	if got, _ := decoded["ok"].(bool); !got {
+		t.Fatalf("result.ok = %#v, want true", decoded["ok"])
 	}
 }
 

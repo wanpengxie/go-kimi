@@ -311,6 +311,15 @@ func cloneArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
 	}
+
+	var deepCopied map[string]any
+	if payload, err := json.Marshal(args); err == nil {
+		if err := json.Unmarshal(payload, &deepCopied); err == nil {
+			return deepCopied
+		}
+	}
+
+	// Fallback to a shallow copy if JSON round-trip fails for non-JSON-able values.
 	out := make(map[string]any, len(args))
 	for key, value := range args {
 		out[key] = value

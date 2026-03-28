@@ -56,7 +56,7 @@ type notificationRequest struct {
 // Response is one JSON-RPC 2.0 response message.
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
+	ID      *int            `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *RPCError       `json:"error,omitempty"`
 }
@@ -312,7 +312,7 @@ func (t *StdioTransport) readLoop(stdout io.ReadCloser) {
 			t.failAllPending(fmt.Errorf("mcp stdio transport: decode response: %w", err))
 			return
 		}
-		if response.ID == 0 {
+		if response.ID == nil {
 			// Notification messages do not carry an id and are ignored in transport layer.
 			continue
 		}
@@ -339,8 +339,13 @@ func (t *StdioTransport) waitLoop() {
 }
 
 func (t *StdioTransport) dispatchResponse(response Response) {
+	if response.ID == nil {
+		return
+	}
+
+	id := *response.ID
 	t.mu.Lock()
-	ch := t.pending[response.ID]
+	ch := t.pending[id]
 	t.mu.Unlock()
 	if ch == nil {
 		return
@@ -525,8 +530,11 @@ func (t *SSETransport) Send(ctx context.Context, method string, params any) (jso
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
 		return nil, fmt.Errorf("mcp sse transport: decode response: %w", err)
 	}
-	if rpcResp.ID != id {
-		return nil, fmt.Errorf("mcp sse transport: unexpected response id %d (want %d)", rpcResp.ID, id)
+	if rpcResp.ID == nil {
+		return nil, errors.New("mcp sse transport: response missing id")
+	}
+	if *rpcResp.ID != id {
+		return nil, fmt.Errorf("mcp sse transport: unexpected response id %d (want %d)", *rpcResp.ID, id)
 	}
 	if rpcResp.Error != nil {
 		return nil, rpcResp.Error
@@ -644,7 +652,7 @@ func parseSSEResponse(body io.Reader, expectedID int) (json.RawMessage, error) {
 		if err := json.Unmarshal([]byte(payload), &response); err != nil {
 			return nil, fmt.Errorf("mcp sse transport: decode stream payload: %w", err), true
 		}
-		if response.ID == 0 || response.ID != expectedID {
+		if response.ID == nil || *response.ID != expectedID {
 			// Ignore notifications and unrelated responses.
 			return nil, nil, false
 		}

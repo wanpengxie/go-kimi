@@ -445,6 +445,84 @@ func TestMCPClientCallToolSuccess(t *testing.T) {
 	}
 }
 
+func TestCloneArgumentsDeepCopyNestedStructures(t *testing.T) {
+	t.Parallel()
+
+	original := map[string]any{
+		"nested": map[string]any{"level": "original"},
+		"list": []any{
+			map[string]any{"item": "v1"},
+			[]any{"inner"},
+		},
+	}
+
+	cloned := cloneArguments(original)
+	if cloned == nil {
+		t.Fatal("cloneArguments() = nil, want non-nil")
+	}
+
+	original["nested"].(map[string]any)["level"] = "mutated"
+	originalList := original["list"].([]any)
+	originalList[0].(map[string]any)["item"] = "changed"
+	originalList[1].([]any)[0] = "changed"
+
+	clonedNested, ok := cloned["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("cloned nested type = %T, want map[string]any", cloned["nested"])
+	}
+	if got := clonedNested["level"]; got != "original" {
+		t.Fatalf("cloned nested.level = %#v, want %q", got, "original")
+	}
+
+	clonedList, ok := cloned["list"].([]any)
+	if !ok {
+		t.Fatalf("cloned list type = %T, want []any", cloned["list"])
+	}
+	firstItem, ok := clonedList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("cloned list[0] type = %T, want map[string]any", clonedList[0])
+	}
+	if got := firstItem["item"]; got != "v1" {
+		t.Fatalf("cloned list[0].item = %#v, want %q", got, "v1")
+	}
+	secondItem, ok := clonedList[1].([]any)
+	if !ok {
+		t.Fatalf("cloned list[1] type = %T, want []any", clonedList[1])
+	}
+	if got := secondItem[0]; got != "inner" {
+		t.Fatalf("cloned list[1][0] = %#v, want %q", got, "inner")
+	}
+}
+
+func TestCloneArgumentsFallbackToShallowCopyOnMarshalFailure(t *testing.T) {
+	t.Parallel()
+
+	nested := map[string]any{"key": "value"}
+	original := map[string]any{
+		"nested": nested,
+		"bad":    func() {},
+	}
+
+	cloned := cloneArguments(original)
+	if cloned == nil {
+		t.Fatal("cloneArguments() = nil, want non-nil")
+	}
+
+	cloned["fromClone"] = true
+	if _, exists := original["fromClone"]; exists {
+		t.Fatal("cloneArguments() should return a new top-level map")
+	}
+
+	nested["key"] = "changed"
+	clonedNested, ok := cloned["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("cloned nested type = %T, want map[string]any", cloned["nested"])
+	}
+	if got := clonedNested["key"]; got != "changed" {
+		t.Fatalf("fallback clone should be shallow, got nested.key = %#v, want %q", got, "changed")
+	}
+}
+
 func TestMCPClientCallToolErrors(t *testing.T) {
 	t.Parallel()
 
