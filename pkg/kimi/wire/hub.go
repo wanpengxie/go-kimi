@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
@@ -282,10 +283,13 @@ type Recorder struct {
 	file   *WireFile
 	source <-chan WireMessage
 
-	mu   sync.Mutex
-	err  error
-	wg   sync.WaitGroup
-	live bool
+	closeOnce sync.Once
+	done      chan struct{}
+	live      atomic.Bool
+	wg        sync.WaitGroup
+
+	mu  sync.Mutex
+	err error
 }
 
 // NewRecorder creates and starts one recorder.
@@ -293,6 +297,7 @@ func NewRecorder(file *WireFile, source <-chan WireMessage) *Recorder {
 	recorder := &Recorder{
 		file:   file,
 		source: source,
+		done:   make(chan struct{}),
 	}
 	if file == nil {
 		recorder.err = errors.New("wire recorder: nil wire file")
@@ -303,7 +308,7 @@ func NewRecorder(file *WireFile, source <-chan WireMessage) *Recorder {
 		return recorder
 	}
 
-	recorder.live = true
+	recorder.live.Store(true)
 	recorder.wg.Add(1)
 	go recorder.run()
 	return recorder
@@ -314,9 +319,12 @@ func (r *Recorder) Close() error {
 	if r == nil {
 		return nil
 	}
-	if r.live {
-		r.wg.Wait()
-	}
+	r.closeOnce.Do(func() {
+		close(r.done)
+		if r.live.Load() {
+			r.wg.Wait()
+		}
+	})
 	return r.Err()
 }
 
@@ -331,16 +339,47 @@ func (r *Recorder) Err() error {
 }
 
 func (r *Recorder) run() {
+	defer r.live.Store(false)
 	defer r.wg.Done()
-	for message := range r.source {
-		if isNilWireMessage(message) {
-			continue
-		}
-		if err := r.file.AppendMessage(message); err != nil {
-			r.setErr(err)
+
+	for {
+		select {
+		case <-r.done:
+			drainLimit := len(r.source)
+			for i := 0; i < drainLimit; i++ {
+				select {
+				case message, ok := <-r.source:
+					if !ok {
+						return
+					}
+					if !r.appendMessage(message) {
+						return
+					}
+				default:
+					return
+				}
+			}
 			return
+		case message, ok := <-r.source:
+			if !ok {
+				return
+			}
+			if !r.appendMessage(message) {
+				return
+			}
 		}
 	}
+}
+
+func (r *Recorder) appendMessage(message WireMessage) bool {
+	if isNilWireMessage(message) {
+		return true
+	}
+	if err := r.file.AppendMessage(message); err != nil {
+		r.setErr(err)
+		return false
+	}
+	return true
 }
 
 func (r *Recorder) setErr(err error) {

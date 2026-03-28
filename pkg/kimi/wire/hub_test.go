@@ -225,6 +225,57 @@ func TestRecorderPersistsMessages(t *testing.T) {
 	}
 }
 
+func TestRecorderCloseReturnsWhenSourceStaysOpen(t *testing.T) {
+	t.Parallel()
+
+	wirePath := filepath.Join(t.TempDir(), "wire", "events.jsonl")
+	wireFile := NewWireFile(wirePath)
+	source := make(chan WireMessage)
+	recorder := NewRecorder(wireFile, source)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- recorder.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Recorder.Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Recorder.Close() blocked while source channel stayed open")
+	}
+
+	close(source)
+}
+
+func TestRecorderCloseIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	wirePath := filepath.Join(t.TempDir(), "wire", "events.jsonl")
+	wireFile := NewWireFile(wirePath)
+	source := make(chan WireMessage)
+	recorder := NewRecorder(wireFile, source)
+
+	for i := 0; i < 2; i++ {
+		done := make(chan error, 1)
+		go func() {
+			done <- recorder.Close()
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Recorder.Close() #%d error = %v", i+1, err)
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("Recorder.Close() #%d blocked", i+1)
+		}
+	}
+
+	close(source)
+}
+
 func mustReadMergedMessage(t *testing.T, messages <-chan WireMessage) WireMessage {
 	t.Helper()
 	select {
