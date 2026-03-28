@@ -121,6 +121,11 @@ func TestTaskOutputDecodeValidation(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), json.RawMessage(fmt.Sprintf(`{"task_id":"t","max_bytes":%d}`, corebg.MaxTaskOutputBytes+1))); err == nil {
 		t.Fatal("Execute(task_output oversized max_bytes) error = nil, want error")
 	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"task_id":"t","unexpected":true}`)); err == nil {
+		t.Fatal("Execute(task_output unexpected field) error = nil, want error")
+	} else if !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("Execute(task_output unexpected field) error = %q, want contains unknown field", err.Error())
+	}
 }
 
 func TestTaskListExecuteSuccess(t *testing.T) {

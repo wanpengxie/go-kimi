@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -140,11 +141,8 @@ func (t *TaskOutputTool) Execute(_ context.Context, params json.RawMessage) (typ
 func decodeTaskOutputParams(raw json.RawMessage) (taskOutputParams, error) {
 	input := taskOutputParams{}
 
-	text := strings.TrimSpace(string(raw))
-	if text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return taskOutputParams{}, fmt.Errorf("task_output: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return taskOutputParams{}, fmt.Errorf("task_output: decode params: %w", err)
 	}
 
 	input.TaskID = strings.TrimSpace(input.TaskID)
