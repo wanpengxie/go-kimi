@@ -11,6 +11,7 @@ import (
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
 func TestForegroundSubagentRunnerRunCreatesNewInstance(t *testing.T) {
@@ -499,6 +500,236 @@ func TestForegroundSubagentRunnerRunAppliesModelOverrideToProvider(t *testing.T)
 	}
 }
 
+func TestForegroundSubagentRunnerRunContinuesShortSummary(t *testing.T) {
+	t.Parallel()
+
+	store := NewSubagentStore(filepath.Join(t.TempDir(), "subagents"))
+	market := NewLaborMarket()
+	market.Register(&AgentTypeDefinition{
+		Name: "planner",
+		ToolPolicy: ToolPolicy{
+			Mode: ToolPolicyInherit,
+		},
+	})
+
+	longSummary := strings.Repeat("summary-token-", 20)
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Delta: types.TextPart{Text: "short"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: longSummary}},
+				{Done: true},
+			},
+		},
+	}
+	runner := NewForegroundSubagentRunner(RunnerDeps{
+		Market:                      market,
+		Store:                       store,
+		Provider:                    provider,
+		ParentRegistry:              mockToolRegistry{},
+		SummaryContinuationMinChars: 200,
+	})
+
+	ret, err := runner.Run(context.Background(), ForegroundRunRequest{
+		SubagentType: "planner",
+		Prompt:       "write summary",
+	})
+	if err != nil {
+		t.Fatalf("Run(summary continuation) error = %v", err)
+	}
+
+	payload, ok := ret.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("Run(summary continuation) return type = %T, want map[string]any", ret.Value)
+	}
+	if got, _ := payload["output_text"].(string); got != longSummary {
+		t.Fatalf("Run(summary continuation) output_text = %q, want %q", got, longSummary)
+	}
+	transcript, ok := payload["transcript"].([]map[string]any)
+	if !ok {
+		t.Fatalf("Run(summary continuation) transcript type = %T, want []map[string]any", payload["transcript"])
+	}
+	if len(transcript) == 0 {
+		t.Fatal("Run(summary continuation) transcript = empty, want records")
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(requests))
+	}
+	lastRequest := requests[1]
+	if len(lastRequest.Messages) == 0 {
+		t.Fatal("continuation request messages = 0, want >= 1")
+	}
+	lastMessage := lastRequest.Messages[len(lastRequest.Messages)-1]
+	if lastMessage.Role != "user" {
+		t.Fatalf("continuation prompt role = %q, want user", lastMessage.Role)
+	}
+	if got := contentPartsText(lastMessage.Content); got != defaultSummaryContinuationPrompt {
+		t.Fatalf("continuation prompt = %q, want %q", got, defaultSummaryContinuationPrompt)
+	}
+}
+
+func TestForegroundSubagentRunnerRunForwardsWireEventsAsSubagentEvents(t *testing.T) {
+	t.Parallel()
+
+	store := NewSubagentStore(filepath.Join(t.TempDir(), "subagents"))
+	market := NewLaborMarket()
+	market.Register(&AgentTypeDefinition{
+		Name: "planner",
+		ToolPolicy: ToolPolicy{
+			Mode: ToolPolicyInherit,
+		},
+	})
+
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Delta: types.TextPart{Text: "forwarded delta"}},
+				{Done: true},
+			},
+		},
+	}
+	collector := &testWireCollector{}
+	runner := NewForegroundSubagentRunner(RunnerDeps{
+		Market:         market,
+		Store:          store,
+		Provider:       provider,
+		ParentRegistry: mockToolRegistry{},
+		WireEmitter:    collector,
+	})
+
+	ret, err := runner.Run(context.Background(), ForegroundRunRequest{
+		SubagentType: "planner",
+		Prompt:       "forward child wire",
+	})
+	if err != nil {
+		t.Fatalf("Run(wire relay) error = %v", err)
+	}
+
+	payload, ok := ret.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("Run(wire relay) return type = %T, want map[string]any", ret.Value)
+	}
+	agentID, _ := payload["agent_id"].(string)
+	if strings.TrimSpace(agentID) == "" {
+		t.Fatalf("Run(wire relay) agent_id = %q, want non-empty", agentID)
+	}
+
+	forwarded := collector.Messages()
+	if len(forwarded) == 0 {
+		t.Fatal("forwarded wire messages = 0, want > 0")
+	}
+
+	foundTextDelta := false
+	foundTurnEnd := false
+	for i := range forwarded {
+		event, ok := forwarded[i].(wire.SubagentEvent)
+		if !ok {
+			t.Fatalf("forwarded message[%d] type = %T, want wire.SubagentEvent", i, forwarded[i])
+		}
+		if event.AgentID != agentID {
+			t.Fatalf("event.AgentID = %q, want %q", event.AgentID, agentID)
+		}
+		switch event.EventType {
+		case "text_delta":
+			foundTextDelta = true
+		case "turn_end":
+			foundTurnEnd = true
+		}
+	}
+	if !foundTextDelta {
+		t.Fatal("forwarded events missing text_delta")
+	}
+	if !foundTurnEnd {
+		t.Fatal("forwarded events missing turn_end")
+	}
+}
+
+func TestForegroundSubagentRunnerRunTranscriptIncludesToolRecords(t *testing.T) {
+	t.Parallel()
+
+	store := NewSubagentStore(filepath.Join(t.TempDir(), "subagents"))
+	market := NewLaborMarket()
+	market.Register(&AgentTypeDefinition{
+		Name: "planner",
+		ToolPolicy: ToolPolicy{
+			Mode:      ToolPolicyAllowlist,
+			Allowlist: []string{"shell"},
+		},
+	})
+
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{ID: "call-shell", Name: "shell", Arguments: map[string]any{"cmd": "echo hi"}}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "tool run complete"}},
+				{Done: true},
+			},
+		},
+	}
+	runner := NewForegroundSubagentRunner(RunnerDeps{
+		Market:   market,
+		Store:    store,
+		Provider: provider,
+		ParentRegistry: mockToolRegistry{
+			definitions: []llm.ToolDefinition{{Name: "shell"}},
+			executors: map[string]toolExecutorFunc{
+				"shell": func(_ context.Context, _ types.ToolCall) (types.ToolResult, error) {
+					return types.ToolResult{
+						Name:       "shell",
+						ToolCallID: "call-shell",
+						Value: types.ToolReturnValue{
+							Value: "ok",
+						},
+					}, nil
+				},
+			},
+		},
+	})
+
+	ret, err := runner.Run(context.Background(), ForegroundRunRequest{
+		SubagentType: "planner",
+		Prompt:       "use shell then summarize",
+	})
+	if err != nil {
+		t.Fatalf("Run(transcript tool records) error = %v", err)
+	}
+
+	payload, ok := ret.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("Run(transcript tool records) return type = %T, want map[string]any", ret.Value)
+	}
+	transcript, ok := payload["transcript"].([]map[string]any)
+	if !ok {
+		t.Fatalf("Run(transcript tool records) transcript type = %T, want []map[string]any", payload["transcript"])
+	}
+	if len(transcript) == 0 {
+		t.Fatal("Run(transcript tool records) transcript = empty, want records")
+	}
+
+	stages := make(map[string]struct{}, len(transcript))
+	for i := range transcript {
+		stage, _ := transcript[i]["stage"].(string)
+		stage = strings.TrimSpace(stage)
+		if stage != "" {
+			stages[stage] = struct{}{}
+		}
+	}
+	if _, ok := stages[transcriptStageToolCall]; !ok {
+		t.Fatalf("transcript stages = %#v, want includes %q", stages, transcriptStageToolCall)
+	}
+	if _, ok := stages[transcriptStageToolResult]; !ok {
+		t.Fatalf("transcript stages = %#v, want includes %q", stages, transcriptStageToolResult)
+	}
+}
+
 func TestForegroundSubagentRunnerValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -519,6 +750,26 @@ func TestForegroundSubagentRunnerValidationErrors(t *testing.T) {
 	if _, err := runner.Run(context.Background(), ForegroundRunRequest{SubagentType: "planner", Prompt: "  "}); err == nil {
 		t.Fatal("Run(empty prompt) error = nil, want error")
 	}
+}
+
+type testWireCollector struct {
+	mu       sync.Mutex
+	messages []wire.WireMessage
+}
+
+func (c *testWireCollector) Emit(msg wire.WireMessage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.messages = append(c.messages, msg)
+	return nil
+}
+
+func (c *testWireCollector) Messages() []wire.WireMessage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]wire.WireMessage, len(c.messages))
+	copy(out, c.messages)
+	return out
 }
 
 func recordPathFor(store *SubagentStore, agentID string) string {

@@ -182,12 +182,14 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	market := newLaborMarket(resolvedSpec, effectiveModel)
 	subagentStore := subagents.NewSubagentStore(sess.SubagentsDir())
 	foregroundRunner := subagents.NewForegroundSubagentRunner(subagents.RunnerDeps{
-		Market:         market,
-		Store:          subagentStore,
-		Provider:       provider,
-		ParentRegistry: toolRegistry,
-		SystemPrompt:   resolvedSpec.SystemPrompt,
-		WorkDir:        workDir,
+		Market:                      market,
+		Store:                       subagentStore,
+		Provider:                    provider,
+		ParentRegistry:              toolRegistry,
+		SystemPrompt:                resolvedSpec.SystemPrompt,
+		WorkDir:                     workDir,
+		WireEmitter:                 wireEmitter,
+		SummaryContinuationMinChars: 200,
 	})
 
 	backgroundStore := corebg.NewBackgroundTaskStore(sess.TasksDir())

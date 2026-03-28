@@ -8,14 +8,18 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xiewanpeng/go-kimi/internal/soul"
 	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
 const defaultSubagentType = "general-purpose"
+
+const defaultSummaryContinuationPrompt = "The previous response is too brief. Provide a fuller final summary (at least 200 characters) focusing on concrete actions, outcomes, and caveats. Do not call tools."
 
 var foregroundAgentSequence uint64
 
@@ -38,6 +42,10 @@ type RunnerDeps struct {
 	ParentRegistry  soul.ToolRegistry
 	SystemPrompt    string
 	WorkDir         string
+	WireEmitter     wire.Emitter
+	// SummaryContinuationMinChars enables one summary continuation run when output
+	// text is shorter than this threshold. Values <= 0 disable continuation.
+	SummaryContinuationMinChars int
 }
 
 // ForegroundSubagentRunner executes one subagent run synchronously.
@@ -213,7 +221,7 @@ func (r *ForegroundSubagentRunner) runWithRecord(
 	def *AgentTypeDefinition,
 	record *AgentInstanceRecord,
 ) (types.ToolReturnValue, error) {
-	runResult, runErr := r.executeSoulRun(ctx, req, def, record)
+	runResult, outputWriter, runErr := r.executeSoulRun(ctx, req, def, record)
 	finalStatus := StatusCompleted
 	if runErr != nil {
 		finalStatus = StatusFailed
@@ -231,7 +239,7 @@ func (r *ForegroundSubagentRunner) runWithRecord(
 	if runErr != nil {
 		return types.ToolReturnValue{}, runErr
 	}
-	return buildRunReturnValue(record, runResult), nil
+	return buildRunReturnValue(record, runResult, outputWriter), nil
 }
 
 func (r *ForegroundSubagentRunner) executeSoulRun(
@@ -239,21 +247,23 @@ func (r *ForegroundSubagentRunner) executeSoulRun(
 	req ForegroundRunRequest,
 	def *AgentTypeDefinition,
 	record *AgentInstanceRecord,
-) (soul.StepResult, error) {
+) (soul.StepResult, *SubagentOutputWriter, error) {
 	contextDir, err := r.agentContextDir(record.AgentID)
 	if err != nil {
-		return soul.StepResult{}, err
+		return soul.StepResult{}, nil, err
 	}
 
+	outputWriter := newSubagentOutputWriter()
 	engine, err := Build(def, BuildConfig{
 		Provider:       r.deps.Provider.WithModel(record.LaunchSpec.EffectiveModel),
 		SystemPrompt:   r.deps.SystemPrompt,
 		WorkDir:        r.deps.WorkDir,
 		ToolPolicy:     def.ToolPolicy,
 		ParentRegistry: r.deps.ParentRegistry,
+		WireEmitter:    newSubagentWireRelay(record.AgentID, r.deps.WireEmitter, outputWriter),
 	}, contextDir)
 	if err != nil {
-		return soul.StepResult{}, err
+		return soul.StepResult{}, outputWriter, err
 	}
 	if r.deps.ApprovalRuntime != nil {
 		source := approvalruntime.ApprovalSource{
@@ -272,14 +282,16 @@ func (r *ForegroundSubagentRunner) executeSoulRun(
 		types.TextPart{Text: req.Prompt},
 	})
 	if err != nil {
-		return soul.StepResult{}, err
+		outputWriter.RecordError(err)
+		return soul.StepResult{}, outputWriter, err
 	}
+	result = r.maybeContinueSummary(ctx, engine, result, outputWriter)
 
 	if req.ModelOverride != "" {
 		record.LaunchSpec.ModelOverride = req.ModelOverride
 		record.LaunchSpec.EffectiveModel = resolveEffectiveModel(req.ModelOverride, def.DefaultModel, r.deps.Provider.ModelName())
 	}
-	return result, nil
+	return result, outputWriter, nil
 }
 
 func (r *ForegroundSubagentRunner) agentContextDir(agentID string) (string, error) {
@@ -294,8 +306,9 @@ func (r *ForegroundSubagentRunner) agentContextDir(agentID string) (string, erro
 	return filepath.Join(baseDir, normalizedAgentID), nil
 }
 
-func buildRunReturnValue(record *AgentInstanceRecord, result soul.StepResult) types.ToolReturnValue {
+func buildRunReturnValue(record *AgentInstanceRecord, result soul.StepResult, outputWriter *SubagentOutputWriter) types.ToolReturnValue {
 	outputText := contentPartsText(result.Content)
+	transcript := outputWriter.Snapshot()
 	return types.ToolReturnValue{
 		Value: map[string]any{
 			"agent_id":      record.AgentID,
@@ -305,6 +318,7 @@ func buildRunReturnValue(record *AgentInstanceRecord, result soul.StepResult) ty
 			"content":       result.Content,
 			"tool_calls":    result.ToolCalls,
 			"tool_results":  result.ToolResults,
+			"transcript":    transcript,
 			"usage": map[string]any{
 				"input_tokens":  result.Usage.InputTokens,
 				"output_tokens": result.Usage.OutputTokens,
@@ -331,6 +345,58 @@ func contentPartsText(parts types.ContentParts) string {
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+func (r *ForegroundSubagentRunner) maybeContinueSummary(
+	ctx context.Context,
+	engine *soul.Soul,
+	result soul.StepResult,
+	outputWriter *SubagentOutputWriter,
+) soul.StepResult {
+	if r == nil || engine == nil {
+		return result
+	}
+	minChars := r.deps.SummaryContinuationMinChars
+	if minChars <= 0 {
+		return result
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(contentPartsText(result.Content))) >= minChars {
+		return result
+	}
+
+	originalRegistry := engine.ToolRegistry()
+	engine.SetToolRegistry(nil)
+	defer engine.SetToolRegistry(originalRegistry)
+
+	continuation, err := engine.Run(ctx, types.ContentParts{
+		types.TextPart{Text: defaultSummaryContinuationPrompt},
+	})
+	if err != nil {
+		if outputWriter != nil {
+			outputWriter.RecordError(fmt.Sprintf("summary continuation: %v", err))
+		}
+		return result
+	}
+	return mergeStepResult(result, continuation)
+}
+
+func mergeStepResult(base soul.StepResult, continuation soul.StepResult) soul.StepResult {
+	merged := base
+	if len(continuation.Content) > 0 {
+		merged.Content = continuation.Content
+	}
+	if len(continuation.ToolCalls) > 0 {
+		merged.ToolCalls = append(append([]types.ToolCall(nil), base.ToolCalls...), continuation.ToolCalls...)
+	}
+	if len(continuation.ToolResults) > 0 {
+		merged.ToolResults = append(append([]types.ToolResult(nil), base.ToolResults...), continuation.ToolResults...)
+	}
+	merged.Usage = types.TokenUsage{
+		InputTokens:  base.Usage.InputTokens + continuation.Usage.InputTokens,
+		OutputTokens: base.Usage.OutputTokens + continuation.Usage.OutputTokens,
+		TotalTokens:  base.Usage.TotalTokens + continuation.Usage.TotalTokens,
+	}
+	return merged
 }
 
 func resolveEffectiveModel(modelOverride, defaultModel, providerModel string) string {

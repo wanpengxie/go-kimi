@@ -19,6 +19,7 @@ type BuildConfig struct {
 	WorkDir        string
 	ToolPolicy     ToolPolicy
 	ParentRegistry soul.ToolRegistry
+	WireEmitter    wire.Emitter
 }
 
 // Build constructs one subagent soul runtime from the type definition and runtime config.
@@ -47,9 +48,12 @@ func Build(def *AgentTypeDefinition, cfg BuildConfig, contextDir string) (*soul.
 		return nil, fmt.Errorf("subagents: restore context: %w", err)
 	}
 
-	emitter := wireFileEmitter{
-		file: wire.NewWireFile(filepath.Join(resolvedContextDir, wireFileName)),
-	}
+	emitter := composeEmitters(
+		wireFileEmitter{
+			file: wire.NewWireFile(filepath.Join(resolvedContextDir, wireFileName)),
+		},
+		cfg.WireEmitter,
+	)
 
 	return soul.NewSoul(
 		cfg.Provider,
@@ -213,4 +217,40 @@ func (e wireFileEmitter) Emit(msg wire.WireMessage) error {
 		return errors.New("subagents: nil wire file")
 	}
 	return e.file.AppendMessage(msg)
+}
+
+type compositeEmitter struct {
+	emitters []wire.Emitter
+}
+
+func (e compositeEmitter) Emit(msg wire.WireMessage) error {
+	var errs []error
+	for i := range e.emitters {
+		emitter := e.emitters[i]
+		if emitter == nil {
+			continue
+		}
+		if err := emitter.Emit(msg); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func composeEmitters(primary wire.Emitter, secondary wire.Emitter) wire.Emitter {
+	emitters := make([]wire.Emitter, 0, 2)
+	if primary != nil {
+		emitters = append(emitters, primary)
+	}
+	if secondary != nil {
+		emitters = append(emitters, secondary)
+	}
+	switch len(emitters) {
+	case 0:
+		return wire.NoopEmitter{}
+	case 1:
+		return emitters[0]
+	default:
+		return compositeEmitter{emitters: emitters}
+	}
 }
