@@ -58,6 +58,41 @@ func TestToolExecuteForeground(t *testing.T) {
 	}
 }
 
+func TestToolExecuteForegroundResumeWithModelOverride(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeForegroundRunner{
+		output: types.ToolReturnValue{
+			Value: map[string]any{
+				"agent_id":    "agent-resume",
+				"output_text": "continued",
+			},
+		},
+	}
+	tool := New(runner, nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{
+	  "agent_id":" agent-resume ",
+	  "prompt":"continue with updated context",
+	  "model_override":" kimi-k2.5 "
+	}`))
+	if err != nil {
+		t.Fatalf("Execute(foreground resume) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(foreground resume) IsError = true, result=%#v", result)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner call count = %d, want 1", len(runner.calls))
+	}
+	if got := runner.calls[0].AgentID; got != "agent-resume" {
+		t.Fatalf("runner agent_id = %q, want %q", got, "agent-resume")
+	}
+	if got := runner.calls[0].ModelOverride; got != "kimi-k2.5" {
+		t.Fatalf("runner model_override = %q, want %q", got, "kimi-k2.5")
+	}
+}
+
 func TestToolExecuteForegroundRunnerError(t *testing.T) {
 	t.Parallel()
 
@@ -97,9 +132,11 @@ func TestToolExecuteBackground(t *testing.T) {
 	tool.TimeoutSec = 12
 
 	result, err := tool.Execute(context.Background(), json.RawMessage(`{
+	  "agent_id":"agent-existing",
 	  "prompt":"delegate to planner",
 	  "subagent_type":"planner",
-	  "run_in_background":true
+	  "run_in_background":true,
+	  "model_override":"kimi-k2.5"
 	}`))
 	if err != nil {
 		t.Fatalf("Execute(background) error = %v", err)
@@ -118,8 +155,14 @@ func TestToolExecuteBackground(t *testing.T) {
 	if spec.SubagentType != "planner" {
 		t.Fatalf("spec.SubagentType = %q, want planner", spec.SubagentType)
 	}
+	if spec.AgentID != "agent-existing" {
+		t.Fatalf("spec.AgentID = %q, want %q", spec.AgentID, "agent-existing")
+	}
 	if spec.Prompt != "delegate to planner" {
 		t.Fatalf("spec.Prompt = %q, want %q", spec.Prompt, "delegate to planner")
+	}
+	if spec.ModelOverride != "kimi-k2.5" {
+		t.Fatalf("spec.ModelOverride = %q, want %q", spec.ModelOverride, "kimi-k2.5")
 	}
 	if spec.TimeoutSec != 12 {
 		t.Fatalf("spec.TimeoutSec = %d, want 12", spec.TimeoutSec)
@@ -134,6 +177,12 @@ func TestToolExecuteBackground(t *testing.T) {
 	}
 	if got, _ := payload["run_in_background"].(bool); !got {
 		t.Fatalf("result run_in_background = %v, want true", got)
+	}
+	if got, _ := payload["agent_id"].(string); got != "agent-existing" {
+		t.Fatalf("result agent_id = %q, want %q", got, "agent-existing")
+	}
+	if got, _ := payload["model_override"].(string); got != "kimi-k2.5" {
+		t.Fatalf("result model_override = %q, want %q", got, "kimi-k2.5")
 	}
 }
 

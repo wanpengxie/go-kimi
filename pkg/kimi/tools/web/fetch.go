@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	xhtml "golang.org/x/net/html"
 )
 
 const (
@@ -41,10 +42,6 @@ var fetchParameterSchema = json.RawMessage(`{
 }`)
 
 var (
-	scriptTagPattern      = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
-	styleTagPattern       = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
-	htmlCommentPattern    = regexp.MustCompile(`(?is)<!--.*?-->`)
-	htmlTagPattern        = regexp.MustCompile(`(?is)<[^>]+>`)
 	htmlWhitespacePattern = regexp.MustCompile(`[ \t\r\f\v]+`)
 )
 
@@ -427,22 +424,52 @@ func looksLikeHTML(text string) bool {
 }
 
 func extractTextFromHTML(source string) string {
-	cleaned := scriptTagPattern.ReplaceAllString(source, "\n")
-	cleaned = styleTagPattern.ReplaceAllString(cleaned, "\n")
-	cleaned = htmlCommentPattern.ReplaceAllString(cleaned, "\n")
-	cleaned = htmlTagPattern.ReplaceAllString(cleaned, "\n")
-	cleaned = html.UnescapeString(cleaned)
+	tokenizer := xhtml.NewTokenizer(strings.NewReader(source))
+	out := make([]string, 0, 64)
+	ignoredTagDepth := 0
 
-	lines := strings.Split(cleaned, "\n")
-	out := make([]string, 0, len(lines))
-	for i := range lines {
-		normalized := htmlWhitespacePattern.ReplaceAllString(strings.TrimSpace(lines[i]), " ")
-		if normalized == "" {
-			continue
+	for {
+		tokenType := tokenizer.Next()
+		switch tokenType {
+		case xhtml.ErrorToken:
+			if errors.Is(tokenizer.Err(), io.EOF) {
+				return strings.Join(out, "\n")
+			}
+			return strings.Join(out, "\n")
+		case xhtml.StartTagToken:
+			name, _ := tokenizer.TagName()
+			tag := strings.ToLower(string(name))
+			if isIgnoredHTMLTag(tag) {
+				ignoredTagDepth++
+			}
+		case xhtml.EndTagToken:
+			name, _ := tokenizer.TagName()
+			tag := strings.ToLower(string(name))
+			if isIgnoredHTMLTag(tag) && ignoredTagDepth > 0 {
+				ignoredTagDepth--
+			}
+		case xhtml.TextToken:
+			if ignoredTagDepth > 0 {
+				continue
+			}
+
+			text := html.UnescapeString(string(tokenizer.Text()))
+			normalized := htmlWhitespacePattern.ReplaceAllString(strings.TrimSpace(text), " ")
+			if normalized == "" {
+				continue
+			}
+			out = append(out, normalized)
 		}
-		out = append(out, normalized)
 	}
-	return strings.Join(out, "\n")
+}
+
+func isIgnoredHTMLTag(tag string) bool {
+	switch tag {
+	case "script", "style", "noscript", "template":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstLine(text string) string {

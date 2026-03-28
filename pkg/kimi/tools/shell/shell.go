@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
@@ -23,7 +24,7 @@ const (
 	minTimeoutSeconds     = 1
 	maxTimeoutSeconds     = 600
 
-	lineTruncateSuffix  = "...[line-truncated]"
+	lineTruncateSuffix   = "...[line-truncated]"
 	outputTruncateSuffix = "\n...[truncated]"
 )
 
@@ -41,28 +42,41 @@ var parameterSchema = json.RawMessage(`{
       "default": 60,
       "description": "Timeout in seconds"
     },
-    "description": {
-      "type": "string",
-      "description": "Optional command description"
-    }
-  },
-  "required": ["command"],
-  "additionalProperties": false
+	    "description": {
+	      "type": "string",
+	      "description": "Optional command description"
+	    },
+	    "background": {
+	      "type": "boolean",
+	      "default": false,
+	      "description": "Run command in background task manager"
+	    }
+	  },
+	  "required": ["command"],
+	  "additionalProperties": false
 }`)
 
 // Approver asks for permission before command execution.
 type Approver func(ctx context.Context, action, desc string) (bool, string)
 
+// BackgroundManager defines background task creation dependency.
+type BackgroundManager interface {
+	CreateBashTask(ctx context.Context, spec corebg.TaskSpec) (string, error)
+}
+
 // Tool implements the shell core tool.
 type Tool struct {
-	WorkDir  string
-	Approver Approver
+	WorkDir             string
+	Approver            Approver
+	BackgroundManager   BackgroundManager
+	BackgroundSessionID string
 }
 
 type executeParams struct {
 	Command     string `json:"command"`
 	Timeout     int    `json:"timeout"`
 	Description string `json:"description"`
+	Background  bool   `json:"background"`
 }
 
 // New creates one shell tool.
@@ -70,6 +84,21 @@ func New(workDir string, approver Approver) *Tool {
 	return &Tool{
 		WorkDir:  strings.TrimSpace(workDir),
 		Approver: approver,
+	}
+}
+
+// NewWithBackground creates one shell tool with background manager integration.
+func NewWithBackground(
+	workDir string,
+	approver Approver,
+	backgroundManager BackgroundManager,
+	sessionID string,
+) *Tool {
+	return &Tool{
+		WorkDir:             strings.TrimSpace(workDir),
+		Approver:            approver,
+		BackgroundManager:   backgroundManager,
+		BackgroundSessionID: strings.TrimSpace(sessionID),
 	}
 }
 
@@ -116,6 +145,10 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage) (types.ToolR
 		}
 	}
 
+	if input.Background {
+		return t.executeBackground(ctx, input, workDir), nil
+	}
+
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(input.Timeout)*time.Second)
 	defer cancel()
 
@@ -139,6 +172,40 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage) (types.ToolR
 	}
 
 	return buildResult(outputText, false), nil
+}
+
+func (t *Tool) executeBackground(ctx context.Context, input executeParams, workDir string) types.ToolResult {
+	if t == nil || t.BackgroundManager == nil {
+		return buildResult("shell tool: background manager is not configured", true)
+	}
+
+	description := strings.TrimSpace(input.Description)
+	if description == "" {
+		description = input.Command
+	}
+
+	taskID, err := t.BackgroundManager.CreateBashTask(ctx, corebg.TaskSpec{
+		SessionID:   strings.TrimSpace(t.BackgroundSessionID),
+		Description: description,
+		Command:     input.Command,
+		WorkDir:     strings.TrimSpace(workDir),
+		TimeoutSec:  input.Timeout,
+	})
+	if err != nil {
+		return buildResult(fmt.Sprintf("shell tool: create background task: %v", err), true)
+	}
+
+	return types.ToolResult{
+		Name: toolName,
+		Value: types.ToolReturnValue{
+			Value: map[string]any{
+				"task_id":           taskID,
+				"status":            string(corebg.TaskCreated),
+				"run_in_background": true,
+				"command":           input.Command,
+			},
+		},
+	}
 }
 
 func (t *Tool) resolveWorkDir() (string, error) {

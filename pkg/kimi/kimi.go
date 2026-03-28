@@ -29,6 +29,7 @@ import (
 	bgtools "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/background"
 	toolfile "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/file"
 	plantool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/plan"
+	questiontool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/question"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/shell"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/think"
 	webtool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/web"
@@ -84,6 +85,10 @@ type Agent struct {
 
 	provider llm.ChatProvider
 
+	wireHub      *wire.Hub
+	wireMerger   *wire.MergingSubscriber
+	wireRecorder *wire.Recorder
+
 	mu         sync.RWMutex
 	lastResult soul.StepResult
 
@@ -118,9 +123,18 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	yolo := runtimeConfig.DefaultYolo
+	if cfg.Overrides.DefaultYolo != nil {
+		yolo = *cfg.Overrides.DefaultYolo
+	}
 
 	planState := plantool.NewPlanState()
 	toolRegistry := tools.NewMapToolRegistry()
+
+	wireHub := wire.NewHub(64)
+	wireMerger := wire.NewMergingSubscriber(wireHub, 128)
+	wireRecorder := wire.NewRecorder(wire.NewWireFile(sess.WireFile), wireMerger.Messages())
+	wireEmitter := composeEmitters(cfg.WireEmitter, wireHub)
 
 	market := newLaborMarket(resolvedSpec, effectiveModel)
 	subagentStore := subagents.NewSubagentStore(sess.SubagentsDir())
@@ -144,7 +158,17 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		return nil, err
 	}
 
-	candidates := buildToolCandidates(runtimeConfig, workDir, planState, foregroundRunner, backgroundManager)
+	candidates := buildToolCandidates(
+		runtimeConfig,
+		workDir,
+		sess.ID,
+		planState,
+		foregroundRunner,
+		backgroundManager,
+		wireHub,
+		wireEmitter,
+		func() bool { return yolo },
+	)
 	candidates = append(candidates, mcpTools...)
 	candidates = append(candidates, cfg.AdditionalTools...)
 
@@ -167,15 +191,10 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		return nil, fmt.Errorf("kimi: restore session context: %w", err)
 	}
 
-	emitter := composeEmitters(cfg.WireEmitter, wireFileEmitter{file: wire.NewWireFile(sess.WireFile)})
-	engine := soul.NewSoul(provider, ctxStore, toolRegistry, emitter, resolvedSpec.SystemPrompt)
+	engine := soul.NewSoul(provider, ctxStore, toolRegistry, wireEmitter, resolvedSpec.SystemPrompt)
 	engine.SetMaxSteps(runtimeConfig.Loop.MaxTurns)
 	engine.SetStepRetryConfig(soul.StepRetryConfig{MaxRetries: runtimeConfig.Loop.MaxRetriesPerStep})
 
-	yolo := runtimeConfig.DefaultYolo
-	if cfg.Overrides.DefaultYolo != nil {
-		yolo = *cfg.Overrides.DefaultYolo
-	}
 	engine.SetYolo(yolo)
 
 	planMode := soul.PlanModeState{}
@@ -220,6 +239,9 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		backgroundManager: backgroundManager,
 		mcpLoader:         mcpLoader,
 		provider:          provider,
+		wireHub:           wireHub,
+		wireMerger:        wireMerger,
+		wireRecorder:      wireRecorder,
 	}, nil
 }
 
@@ -302,6 +324,17 @@ func (a *Agent) Close() error {
 		if a.mcpLoader != nil {
 			if err := a.mcpLoader.Close(); err != nil {
 				errs = append(errs, err)
+			}
+		}
+		if a.wireMerger != nil {
+			a.wireMerger.Close()
+		}
+		if a.wireHub != nil {
+			a.wireHub.Close()
+		}
+		if a.wireRecorder != nil {
+			if err := a.wireRecorder.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("kimi: close wire recorder: %w", err))
 			}
 		}
 		if a.session != nil {
@@ -447,18 +480,23 @@ func resolveProvider(cfg config.Config, spec *agentspec.ResolvedSpec, agentCfg A
 func buildToolCandidates(
 	cfg config.Config,
 	workDir string,
+	sessionID string,
 	planState *plantool.PlanState,
 	foregroundRunner *subagents.ForegroundSubagentRunner,
 	backgroundManager *corebg.BackgroundTaskManager,
+	questionHub *wire.Hub,
+	questionPublisher wire.Emitter,
+	yoloChecker questiontool.YoloChecker,
 ) []tools.Tool {
 	candidates := []tools.Tool{
 		think.New(),
-		shell.New(workDir, nil),
+		shell.NewWithBackground(workDir, nil, backgroundManager, sessionID),
 		toolfile.NewReadFile(workDir),
 		toolfile.NewWriteFile(workDir, nil),
 		toolfile.NewStrReplace(workDir, nil),
 		toolfile.NewGrep(workDir),
 		toolfile.NewGlob(workDir),
+		questiontool.New(questionHub, questionPublisher, yoloChecker),
 		plantool.NewEnterPlanMode(workDir, planState),
 		plantool.NewExitPlanMode(planState),
 		agenttool.New(foregroundRunner, backgroundManager),

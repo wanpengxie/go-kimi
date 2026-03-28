@@ -22,6 +22,10 @@ const (
 var parameterSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "agent_id": {
+      "type": "string",
+      "description": "Existing agent id to resume"
+    },
     "prompt": {
       "type": "string",
       "description": "Task description passed to the subagent"
@@ -35,6 +39,10 @@ var parameterSchema = json.RawMessage(`{
       "type": "boolean",
       "default": false,
       "description": "Run the delegated task as a background task"
+    },
+    "model_override": {
+      "type": "string",
+      "description": "Override model name for this run"
     }
   },
   "required": ["prompt"],
@@ -60,9 +68,11 @@ type Tool struct {
 }
 
 type executeParams struct {
+	AgentID         string `json:"agent_id"`
 	Prompt          string `json:"prompt"`
 	SubagentType    string `json:"subagent_type"`
 	RunInBackground bool   `json:"run_in_background"`
+	ModelOverride   string `json:"model_override"`
 }
 
 // New creates one agent tool.
@@ -111,8 +121,10 @@ func (t *Tool) executeForeground(ctx context.Context, input executeParams) types
 	}
 
 	output, err := t.ForegroundRunner.Run(ctx, subagents.ForegroundRunRequest{
-		SubagentType: input.SubagentType,
-		Prompt:       input.Prompt,
+		AgentID:       input.AgentID,
+		SubagentType:  input.SubagentType,
+		Prompt:        input.Prompt,
+		ModelOverride: input.ModelOverride,
 	})
 	if err != nil {
 		return toolErrorResult(fmt.Sprintf("agent tool: run foreground subagent: %v", err))
@@ -139,11 +151,13 @@ func (t *Tool) executeBackground(ctx context.Context, input executeParams) types
 	}
 
 	spec := corebg.TaskSpec{
-		SessionID:    strings.TrimSpace(t.SessionID),
-		Description:  input.Prompt,
-		SubagentType: input.SubagentType,
-		Prompt:       input.Prompt,
-		TimeoutSec:   nonNegative(t.TimeoutSec),
+		SessionID:     strings.TrimSpace(t.SessionID),
+		Description:   input.Prompt,
+		AgentID:       input.AgentID,
+		SubagentType:  input.SubagentType,
+		Prompt:        input.Prompt,
+		ModelOverride: input.ModelOverride,
+		TimeoutSec:    nonNegative(t.TimeoutSec),
 	}
 	taskID, err := t.BackgroundManager.CreateAgentTask(ctx, spec)
 	if err != nil {
@@ -153,12 +167,12 @@ func (t *Tool) executeBackground(ctx context.Context, input executeParams) types
 	return types.ToolResult{
 		Name: toolName,
 		Value: types.ToolReturnValue{
-			Value: map[string]any{
+			Value: mergeMap(map[string]any{
 				"task_id":           taskID,
 				"status":            string(corebg.TaskCreated),
 				"subagent_type":     input.SubagentType,
 				"run_in_background": true,
-			},
+			}, optionalBackgroundFields(input)),
 		},
 	}
 }
@@ -177,11 +191,24 @@ func decodeParams(raw json.RawMessage) (executeParams, error) {
 	if input.Prompt == "" {
 		return executeParams{}, errors.New("agent tool: prompt is required")
 	}
+	input.AgentID = strings.TrimSpace(input.AgentID)
 	input.SubagentType = strings.TrimSpace(input.SubagentType)
 	if input.SubagentType == "" {
 		input.SubagentType = defaultSubagentType
 	}
+	input.ModelOverride = strings.TrimSpace(input.ModelOverride)
 	return input, nil
+}
+
+func optionalBackgroundFields(input executeParams) map[string]any {
+	extras := map[string]any{}
+	if input.AgentID != "" {
+		extras["agent_id"] = input.AgentID
+	}
+	if input.ModelOverride != "" {
+		extras["model_override"] = input.ModelOverride
+	}
+	return extras
 }
 
 func toolErrorResult(message string) types.ToolResult {

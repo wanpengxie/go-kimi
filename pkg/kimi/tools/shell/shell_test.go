@@ -3,11 +3,13 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -115,6 +117,79 @@ func TestShellExecuteNonZeroExitIsError(t *testing.T) {
 	}
 }
 
+func TestShellExecuteBackgroundSuccess(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeBackgroundManager{taskID: "task-shell-1"}
+	tool := NewWithBackground(t.TempDir(), nil, manager, "session-42")
+	params := mustParams(t, executeParams{
+		Command:    "echo background",
+		Timeout:    12,
+		Background: true,
+	})
+
+	result, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Execute(background) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+	if len(manager.calls) != 1 {
+		t.Fatalf("CreateBashTask call count = %d, want 1", len(manager.calls))
+	}
+	if got := manager.calls[0].Command; got != "echo background" {
+		t.Fatalf("spec.Command = %q, want %q", got, "echo background")
+	}
+	if got := manager.calls[0].SessionID; got != "session-42" {
+		t.Fatalf("spec.SessionID = %q, want %q", got, "session-42")
+	}
+
+	payload, ok := result.Value.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", result.Value.Value)
+	}
+	if got, _ := payload["task_id"].(string); got != "task-shell-1" {
+		t.Fatalf("payload.task_id = %q, want %q", got, "task-shell-1")
+	}
+	if got, _ := payload["run_in_background"].(bool); !got {
+		t.Fatalf("payload.run_in_background = %v, want true", got)
+	}
+}
+
+func TestShellExecuteBackgroundManagerErrors(t *testing.T) {
+	t.Parallel()
+
+	tool := NewWithBackground(t.TempDir(), nil, nil, "session-42")
+	result, err := tool.Execute(context.Background(), mustParams(t, executeParams{
+		Command:    "echo x",
+		Timeout:    2,
+		Background: true,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(background missing manager) error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+
+	tool = NewWithBackground(t.TempDir(), nil, &fakeBackgroundManager{err: errors.New("create failed")}, "session-42")
+	result, err = tool.Execute(context.Background(), mustParams(t, executeParams{
+		Command:    "echo x",
+		Timeout:    2,
+		Background: true,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(background manager error) error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if !strings.Contains(resultOutputText(t, result), "create failed") {
+		t.Fatalf("result output = %q, want contains create failed", resultOutputText(t, result))
+	}
+}
+
 func mustParams(t *testing.T, input executeParams) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(input)
@@ -136,4 +211,21 @@ func resultOutputText(t *testing.T, result types.ToolResult) string {
 		t.Fatalf("result output type = %T, want string", result.Value.Value)
 	}
 	return output
+}
+
+type fakeBackgroundManager struct {
+	calls  []corebg.TaskSpec
+	taskID string
+	err    error
+}
+
+func (m *fakeBackgroundManager) CreateBashTask(_ context.Context, spec corebg.TaskSpec) (string, error) {
+	m.calls = append(m.calls, spec)
+	if m.err != nil {
+		return "", m.err
+	}
+	if strings.TrimSpace(m.taskID) == "" {
+		return "task-generated", nil
+	}
+	return m.taskID, nil
 }
