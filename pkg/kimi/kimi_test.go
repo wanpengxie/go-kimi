@@ -308,7 +308,7 @@ func (p *trackingProvider) WithModel(model string) llm.ChatProvider {
 		return p
 	}
 	if p.withModelCalls != nil {
-		*p.withModelCalls++
+		(*p.withModelCalls)++
 	}
 	clone := *p
 	clone.model = strings.TrimSpace(model)
@@ -320,7 +320,7 @@ func (p *trackingProvider) WithThinking(effort llm.ThinkingEffort) llm.ChatProvi
 		return p
 	}
 	if p.withThinkingCalls != nil {
-		*p.withThinkingCalls++
+		(*p.withThinkingCalls)++
 	}
 	clone := *p
 	clone.thinking = llm.NormalizeThinkingEffort(effort)
