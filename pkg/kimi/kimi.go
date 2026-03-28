@@ -172,6 +172,11 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	wireMerger := wire.NewMergingSubscriber(wireHub, 128)
 	wireRecorder := wire.NewRecorder(wire.NewWireFile(sess.WireFile), wireMerger.Messages())
 	wireEmitter := composeEmitters(cfg.WireEmitter, wireHub)
+	cleanupWire := func() {
+		wireMerger.Close()
+		wireHub.Close()
+		_ = wireRecorder.Close()
+	}
 	planSyncer := newPlanModeSyncer(sess, planMode)
 
 	market := newLaborMarket(resolvedSpec, effectiveModel)
@@ -193,6 +198,7 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 
 	mcpTools, mcpLoader, err := loadMCPTools(runtimeConfig)
 	if err != nil {
+		cleanupWire()
 		return nil, err
 	}
 
@@ -219,6 +225,7 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		if mcpLoader != nil {
 			_ = mcpLoader.Close()
 		}
+		cleanupWire()
 		return nil, err
 	}
 	for i := range selectedTools {
@@ -247,6 +254,7 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		if mcpLoader != nil {
 			_ = mcpLoader.Close()
 		}
+		cleanupWire()
 		return nil, fmt.Errorf("kimi: discover skills: %w", err)
 	}
 	skill.RegisterSkills(engine, rootSkills)

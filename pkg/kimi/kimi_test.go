@@ -1,9 +1,13 @@
 package kimi
 
 import (
+	"bytes"
 	"context"
 	stdErrors "errors"
+	"runtime/pprof"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/agentspec"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
@@ -71,6 +75,51 @@ func TestNewAgentAllowedToolNotFound(t *testing.T) {
 	}
 	if !stdErrors.Is(err, kimierrors.ErrToolNotFound) {
 		t.Fatalf("NewAgent() error = %v, want ErrToolNotFound", err)
+	}
+}
+
+func TestNewAgent_ConstructorCleanup(t *testing.T) {
+	runtimeCfg := testRuntimeConfig()
+	spec := &agentspec.ResolvedSpec{
+		Name:         "restricted",
+		AllowedTools: []string{"does_not_exist"},
+	}
+
+	beforeMerger := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*MergingSubscriber).run")
+	beforeRecorder := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*Recorder).run")
+
+	const attempts = 12
+	for i := 0; i < attempts; i++ {
+		_, err := NewAgent(AgentConfig{
+			WorkDir: t.TempDir(),
+			Config:  runtimeCfg,
+			Spec:    spec,
+		})
+		if err == nil {
+			t.Fatalf("attempt %d: NewAgent() error = nil, want tool-not-found", i)
+		}
+		if !stdErrors.Is(err, kimierrors.ErrToolNotFound) {
+			t.Fatalf("attempt %d: NewAgent() error = %v, want ErrToolNotFound", i, err)
+		}
+	}
+
+	waitDeadline := time.Now().Add(2 * time.Second)
+	for {
+		afterMerger := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*MergingSubscriber).run")
+		afterRecorder := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*Recorder).run")
+		if afterMerger <= beforeMerger && afterRecorder <= beforeRecorder {
+			return
+		}
+		if time.Now().After(waitDeadline) {
+			t.Fatalf(
+				"constructor failures leaked wire goroutines: merger before=%d after=%d, recorder before=%d after=%d",
+				beforeMerger,
+				afterMerger,
+				beforeRecorder,
+				afterRecorder,
+			)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -179,4 +228,18 @@ func (e *testWireEmitter) Emit(_ wire.WireMessage) error {
 	}
 	e.calls++
 	return e.err
+}
+
+func countWireGoroutineStacks(t *testing.T, stackSignature string) int {
+	t.Helper()
+	stackSignature = strings.TrimSpace(stackSignature)
+	if stackSignature == "" {
+		t.Fatal("stack signature must not be empty")
+	}
+
+	var goroutines bytes.Buffer
+	if err := pprof.Lookup("goroutine").WriteTo(&goroutines, 2); err != nil {
+		t.Fatalf("dump goroutine profile: %v", err)
+	}
+	return strings.Count(goroutines.String(), stackSignature)
 }
