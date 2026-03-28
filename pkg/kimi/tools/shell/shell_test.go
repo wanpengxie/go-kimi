@@ -190,6 +190,15 @@ func TestShellExecuteBackgroundManagerErrors(t *testing.T) {
 	}
 }
 
+func TestShellExecuteRejectsUnexpectedField(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo ok","timeout":1,"unexpected":true}`)); err == nil {
+		t.Fatal("Execute(unexpected field) error = nil, want validation error")
+	}
+}
+
 func mustParams(t *testing.T, input executeParams) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(input)

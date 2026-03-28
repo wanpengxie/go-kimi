@@ -147,6 +147,9 @@ func TestAskUserQuestionExecuteValidatesInput(t *testing.T) {
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"questions":[{"id":"a","question":"x"},{"id":"a","question":"y"}]}`)); err == nil {
 		t.Fatal("Execute(duplicate id) error = nil, want validation error")
 	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"questions":[{"id":"a","question":"x"}],"unexpected":true}`)); err == nil {
+		t.Fatal("Execute(unexpected field) error = nil, want validation error")
+	}
 }
 
 func mustReadQuestionRequest(t *testing.T, ch <-chan wire.WireMessage) wire.QuestionRequest {

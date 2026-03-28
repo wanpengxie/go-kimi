@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
@@ -158,12 +159,8 @@ func (t *ExitPlanMode) planState() *PlanState {
 
 func decodeExitParams(raw json.RawMessage) (exitParams, error) {
 	input := exitParams{}
-
-	text := strings.TrimSpace(string(raw))
-	if text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return exitParams{}, fmt.Errorf("exit_plan_mode: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return exitParams{}, fmt.Errorf("exit_plan_mode: decode params: %w", err)
 	}
 
 	input.Decision = strings.ToLower(strings.TrimSpace(input.Decision))

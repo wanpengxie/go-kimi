@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -134,10 +135,8 @@ func (t *ReadMediaFile) Execute(_ context.Context, params json.RawMessage) (type
 
 func decodeReadMediaParams(raw json.RawMessage) (readMediaParams, error) {
 	input := readMediaParams{}
-	if text := strings.TrimSpace(string(raw)); text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return readMediaParams{}, fmt.Errorf("read_media_file: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return readMediaParams{}, fmt.Errorf("read_media_file: decode params: %w", err)
 	}
 
 	input.Path = strings.TrimSpace(input.Path)

@@ -63,6 +63,9 @@ func TestSendDMailExecuteRejectsInvalidParams(t *testing.T) {
 	})); err == nil {
 		t.Fatal("Execute(missing checkpoint_id) error = nil, want validation error")
 	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"checkpoint_id":1,"message":"ok","unexpected":true}`)); err == nil {
+		t.Fatal("Execute(unexpected field) error = nil, want validation error")
+	}
 }
 
 func TestSendDMailExecuteReturnsErrorResultOnRevertFailure(t *testing.T) {

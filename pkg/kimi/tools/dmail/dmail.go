@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/xiewanpeng/go-kimi/internal/soul"
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -107,12 +108,8 @@ func (t *Tool) Execute(_ context.Context, params json.RawMessage) (types.ToolRes
 
 func decodeParams(raw json.RawMessage) (executeParams, error) {
 	input := executeParams{}
-
-	text := strings.TrimSpace(string(raw))
-	if text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return executeParams{}, fmt.Errorf("send_dmail: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return executeParams{}, fmt.Errorf("send_dmail: decode params: %w", err)
 	}
 
 	if input.CheckpointID == nil {

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
@@ -180,17 +181,9 @@ func (t *EnterPlanMode) generateSlug() (string, error) {
 }
 
 func decodeEnterParams(raw json.RawMessage) error {
-	text := strings.TrimSpace(string(raw))
-	if text == "" || text == "null" {
-		return nil
-	}
-
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	var decoded struct{}
+	if err := toolparams.DecodeStrict(raw, &decoded); err != nil {
 		return fmt.Errorf("enter_plan_mode: decode params: %w", err)
-	}
-	if len(decoded) > 0 {
-		return errors.New("enter_plan_mode: this tool does not accept parameters")
 	}
 	return nil
 }

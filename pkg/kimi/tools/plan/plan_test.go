@@ -196,6 +196,18 @@ func TestExitPlanModeExecuteRejectsInvalidDecision(t *testing.T) {
 	}
 }
 
+func TestExitPlanModeExecuteRejectsUnexpectedParams(t *testing.T) {
+	t.Parallel()
+
+	tool := NewExitPlanMode(NewPlanState())
+	if _, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"decision": "approve",
+		"unknown":  true,
+	})); err == nil {
+		t.Fatal("Execute(unexpected params) error = nil, want validation error")
+	}
+}
+
 func TestExitPlanModeExecuteWithoutActivePlan(t *testing.T) {
 	t.Parallel()
 

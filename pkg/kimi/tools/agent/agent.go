@@ -9,6 +9,7 @@ import (
 
 	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/subagents"
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -179,12 +180,8 @@ func (t *Tool) executeBackground(ctx context.Context, input executeParams) types
 
 func decodeParams(raw json.RawMessage) (executeParams, error) {
 	input := executeParams{}
-
-	text := strings.TrimSpace(string(raw))
-	if text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return executeParams{}, fmt.Errorf("agent tool: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return executeParams{}, fmt.Errorf("agent tool: decode params: %w", err)
 	}
 
 	input.Prompt = strings.TrimSpace(input.Prompt)

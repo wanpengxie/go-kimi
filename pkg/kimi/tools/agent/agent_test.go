@@ -240,6 +240,15 @@ func TestToolExecuteMissingPrompt(t *testing.T) {
 	}
 }
 
+func TestToolExecuteRejectsUnexpectedField(t *testing.T) {
+	t.Parallel()
+
+	tool := New(nil, nil)
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"prompt":"do work","unexpected":true}`)); err == nil {
+		t.Fatal("Execute(unexpected field) error = nil, want validation error")
+	}
+}
+
 type fakeForegroundRunner struct {
 	calls  []subagents.ForegroundRunRequest
 	output types.ToolReturnValue

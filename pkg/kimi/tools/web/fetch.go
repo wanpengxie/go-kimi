@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	xhtml "golang.org/x/net/html"
 )
@@ -135,12 +136,8 @@ func (t *FetchURL) Execute(ctx context.Context, params json.RawMessage) (types.T
 
 func decodeFetchParams(raw json.RawMessage) (fetchParams, error) {
 	input := fetchParams{}
-
-	text := strings.TrimSpace(string(raw))
-	if text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return fetchParams{}, fmt.Errorf("fetch_url: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return fetchParams{}, fmt.Errorf("fetch_url: decode params: %w", err)
 	}
 
 	input.URL = strings.TrimSpace(input.URL)

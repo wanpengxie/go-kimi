@@ -13,6 +13,7 @@ import (
 
 	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -223,11 +224,8 @@ func decodeParams(raw json.RawMessage) (executeParams, error) {
 	input := executeParams{
 		Timeout: defaultTimeoutSeconds,
 	}
-
-	if text := strings.TrimSpace(string(raw)); text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return executeParams{}, fmt.Errorf("shell tool: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return executeParams{}, fmt.Errorf("shell tool: decode params: %w", err)
 	}
 
 	input.Command = strings.TrimSpace(input.Command)

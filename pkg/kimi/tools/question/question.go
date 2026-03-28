@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
@@ -220,12 +221,8 @@ func decodeParams(raw json.RawMessage) (executeParams, error) {
 	input := executeParams{
 		TimeoutSeconds: defaultTimeoutSeconds,
 	}
-
-	text := strings.TrimSpace(string(raw))
-	if text != "" && text != "null" {
-		if err := json.Unmarshal(raw, &input); err != nil {
-			return executeParams{}, fmt.Errorf("ask_user_question: decode params: %w", err)
-		}
+	if err := toolparams.DecodeStrict(raw, &input); err != nil {
+		return executeParams{}, fmt.Errorf("ask_user_question: decode params: %w", err)
 	}
 
 	input.Prompt = strings.TrimSpace(input.Prompt)

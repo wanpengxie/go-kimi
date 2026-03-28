@@ -614,6 +614,15 @@ func TestReadMediaFileExecuteRejectsOversizedFile(t *testing.T) {
 	}
 }
 
+func TestReadMediaFileExecuteRejectsUnexpectedField(t *testing.T) {
+	t.Parallel()
+
+	tool := NewReadMediaFile(t.TempDir(), true, true)
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"path":"tiny.png","unexpected":true}`)); err == nil {
+		t.Fatal("Execute(unexpected field) error = nil, want validation error")
+	}
+}
+
 func mustParams(t *testing.T, input any) json.RawMessage {
 	t.Helper()
 	encoded, err := json.Marshal(input)

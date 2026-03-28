@@ -152,6 +152,18 @@ func TestFetchURLExecuteRejectsInvalidURL(t *testing.T) {
 	}
 }
 
+func TestFetchURLExecuteRejectsUnexpectedField(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(nil)
+	if _, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url":        "http://93.184.216.34/article",
+		"unexpected": true,
+	})); err == nil {
+		t.Fatal("Execute(unexpected field) error = nil, want validation error")
+	}
+}
+
 func TestFetchURLExecuteRejectsBlockedTargetHost(t *testing.T) {
 	t.Parallel()
 
