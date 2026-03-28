@@ -42,9 +42,7 @@ func TestLiveSessionWithSoul(t *testing.T) {
 	result, err := engine.Run(ctx, types.ContentParts{
 		types.TextPart{Text: "Reply with this token only: " + token},
 	})
-	if err != nil {
-		t.Fatalf("Soul.Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if !containsCaseFold(output, token) {
 		t.Fatalf("live response = %q, want contains %q", output, token)
@@ -122,9 +120,7 @@ func TestLiveForegroundSubagent(t *testing.T) {
 		SubagentType: "general-purpose",
 		Prompt:       "Reply with EXACT token " + token + " only.",
 	})
-	if err != nil {
-		t.Fatalf("ForegroundSubagentRunner.Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	payload, ok := ret.Value.(map[string]any)
 	if !ok {
@@ -232,9 +228,7 @@ func TestLiveSoulWithAgentTool(t *testing.T) {
 	result, err := engine.Run(ctx, types.ContentParts{
 		types.TextPart{Text: "Call the agent tool exactly once in foreground. Send it a prompt that asks for exact token " + token + ". After tool returns, reply with token only."},
 	})
-	if err != nil {
-		t.Fatalf("Soul.Run() with agent tool error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if !containsCaseFold(output, token) {

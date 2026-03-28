@@ -26,9 +26,7 @@ func TestLiveSoulWithThinkTool(t *testing.T) {
 	result, err := live.engine.Run(live.ctx, types.ContentParts{
 		types.TextPart{Text: "Before answering, call the think tool exactly once with a short thought, then reply with EXACT text THINK_TOOL_DONE."},
 	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if !strings.Contains(output, "THINK_TOOL_DONE") {
@@ -47,9 +45,7 @@ func TestLiveSoulWithShellTool(t *testing.T) {
 	result, err := live.engine.Run(live.ctx, types.ContentParts{
 		types.TextPart{Text: "Use the shell tool to run EXACT command: printf " + token + ". Then respond with the command output only."},
 	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if !strings.Contains(output, token) {
@@ -75,9 +71,7 @@ func TestLiveSoulWithReadFile(t *testing.T) {
 	result, err := live.engine.Run(live.ctx, types.ContentParts{
 		types.TextPart{Text: "Use read_file tool on path memo.txt and reply with the token in that file only."},
 	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if !strings.Contains(output, token) {
@@ -95,9 +89,7 @@ func TestLiveSoulWithMultipleTurns(t *testing.T) {
 	firstResult, err := live.engine.Run(live.ctx, types.ContentParts{
 		types.TextPart{Text: "Remember this token for later: " + token + ". Reply with STORED."},
 	})
-	if err != nil {
-		t.Fatalf("first Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 	firstOutput := strings.TrimSpace(liveTextFromContentParts(firstResult.Content))
 	if firstOutput == "" {
 		t.Fatalf("first live response is empty: %#v", firstResult.Content)
@@ -106,9 +98,7 @@ func TestLiveSoulWithMultipleTurns(t *testing.T) {
 	secondResult, err := live.engine.Run(live.ctx, types.ContentParts{
 		types.TextPart{Text: "What is the token I asked you to remember? Reply with token only."},
 	})
-	if err != nil {
-		t.Fatalf("second Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 	secondOutput := strings.TrimSpace(liveTextFromContentParts(secondResult.Content))
 	if !strings.Contains(strings.ToUpper(secondOutput), token) {
 		t.Fatalf("second live response = %q, want contains %q", secondOutput, token)
@@ -128,9 +118,7 @@ func TestLiveSoulWithSystemPrompt(t *testing.T) {
 	result, err := live.engine.Run(live.ctx, types.ContentParts{
 		types.TextPart{Text: "Reply with a short greeting."},
 	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if !strings.HasPrefix(output, prefix) {

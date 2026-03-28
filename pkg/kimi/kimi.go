@@ -40,7 +40,7 @@ import (
 
 const (
 	// Version is the SDK placeholder version.
-	Version = "0.0.0-dev"
+	Version = "v1.0.0"
 
 	defaultSubagentType = "general-purpose"
 	closeTimeout        = 3 * time.Second
@@ -173,9 +173,9 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	wireRecorder := wire.NewRecorder(wire.NewWireFile(sess.WireFile), wireMerger.Messages())
 	wireEmitter := composeEmitters(cfg.WireEmitter, wireHub)
 	cleanupWire := func() {
-		wireMerger.Close()
 		wireHub.Close()
 		_ = wireRecorder.Close()
+		wireMerger.Close()
 	}
 	planSyncer := newPlanModeSyncer(sess, planMode)
 
@@ -355,9 +355,6 @@ func (a *Agent) Close() error {
 				errs = append(errs, err)
 			}
 		}
-		if a.wireMerger != nil {
-			a.wireMerger.Close()
-		}
 		if a.wireHub != nil {
 			a.wireHub.Close()
 		}
@@ -365,6 +362,9 @@ func (a *Agent) Close() error {
 			if err := a.wireRecorder.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("kimi: close wire recorder: %w", err))
 			}
+		}
+		if a.wireMerger != nil {
+			a.wireMerger.Close()
 		}
 		if a.session != nil {
 			if err := a.session.SaveState(); err != nil {

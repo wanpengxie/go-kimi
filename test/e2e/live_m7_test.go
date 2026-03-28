@@ -110,9 +110,7 @@ func TestLiveSoulWithMCPTools(t *testing.T) {
 	result, err := engine.Run(ctx, types.ContentParts{
 		types.TextPart{Text: "Call tool " + toolName + " exactly once with argument message=\"" + token + "\". After tool returns, reply with token only."},
 	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if !containsCaseFold(output, token) {

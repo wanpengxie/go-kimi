@@ -59,9 +59,7 @@ func TestLiveSoulSingleTurn(t *testing.T) {
 	result, err := engine.Run(ctx, types.ContentParts{
 		types.TextPart{Text: "hello, reply in one sentence"},
 	})
-	if err != nil {
-		t.Fatalf("Run() with live Moonshot provider error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(result.Content))
 	if output == "" {

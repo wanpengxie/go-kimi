@@ -34,7 +34,7 @@ func TestLiveM8AgentFacadeBasicTurn(t *testing.T) {
 	}()
 
 	const token = "LIVE_M8_AGENT_BASIC_TOKEN_2026"
-	liveM8RunOrSkip(t, agent.Run(ctx, "Reply with this token only: "+token))
+	liveRunOrSkip(t, agent.Run(ctx, "Reply with this token only: "+token))
 
 	output := strings.TrimSpace(liveTextFromContentParts(agent.LastResult().Content))
 	if !containsCaseFold(output, token) {
@@ -58,7 +58,7 @@ func TestLiveM8AgentFacadeSessionResume(t *testing.T) {
 	}
 
 	const firstToken = "LIVE_M8_SESSION_FIRST_TOKEN_2026"
-	liveM8RunOrSkip(t, agent1.Run(ctx, "Reply with this token only: "+firstToken))
+	liveRunOrSkip(t, agent1.Run(ctx, "Reply with this token only: "+firstToken))
 	firstOutput := strings.TrimSpace(liveTextFromContentParts(agent1.LastResult().Content))
 	if !containsCaseFold(firstOutput, firstToken) {
 		t.Fatalf("first live response = %q, want contains %q", firstOutput, firstToken)
@@ -82,7 +82,7 @@ func TestLiveM8AgentFacadeSessionResume(t *testing.T) {
 	}
 
 	const secondToken = "LIVE_M8_SESSION_SECOND_TOKEN_2026"
-	liveM8RunOrSkip(t, agent2.Run(ctx, "Reply with this token only: "+secondToken))
+	liveRunOrSkip(t, agent2.Run(ctx, "Reply with this token only: "+secondToken))
 	secondOutput := strings.TrimSpace(liveTextFromContentParts(agent2.LastResult().Content))
 	if !containsCaseFold(secondOutput, secondToken) {
 		t.Fatalf("second live response = %q, want contains %q", secondOutput, secondToken)
@@ -173,7 +173,7 @@ func TestLiveM8AgentFacadeApprovalRuntime(t *testing.T) {
 		t.Fatalf("resolved decision = %v, want approve", *resolved.Record.Decision)
 	}
 
-	liveM8RunOrSkip(t, waitLiveM8RunOutcome(t, outcome, 90*time.Second))
+	liveRunOrSkip(t, waitLiveM8RunOutcome(t, outcome, 90*time.Second))
 
 	output := strings.TrimSpace(liveTextFromContentParts(agent.LastResult().Content))
 	if !containsCaseFold(output, token) {
@@ -218,7 +218,7 @@ func TestLiveM8AgentFacadeWireEvents(t *testing.T) {
 	}()
 
 	const token = "LIVE_M8_WIRE_TOKEN_2026"
-	liveM8RunOrSkip(t, agent.Run(ctx, "Reply with this token only: "+token))
+	liveRunOrSkip(t, agent.Run(ctx, "Reply with this token only: "+token))
 
 	events := drainLiveWireMessages(wireCh)
 	hasBegin := false
@@ -237,49 +237,6 @@ func TestLiveM8AgentFacadeWireEvents(t *testing.T) {
 	if !hasBegin || !hasDelta || !hasEnd {
 		t.Fatalf("wire events missing required types: begin=%v delta=%v end=%v events=%#v", hasBegin, hasDelta, hasEnd, events)
 	}
-}
-
-func liveM8RunOrSkip(t *testing.T, err error) {
-	t.Helper()
-	if err == nil {
-		return
-	}
-	if liveM8IsEnvSkippableError(err) {
-		t.Skipf("skip live m8 due env/provider constraint: %v", err)
-	}
-	t.Fatalf("run error = %v", err)
-}
-
-func liveM8IsEnvSkippableError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	if message == "" {
-		return false
-	}
-	if strings.Contains(message, "resource_not_found_error") {
-		return true
-	}
-	if strings.Contains(message, "not found the model") {
-		return true
-	}
-	if strings.Contains(message, "permission denied") {
-		return true
-	}
-	if strings.Contains(message, "status 401") || strings.Contains(message, "status 403") {
-		return true
-	}
-	if strings.Contains(message, "status 429") {
-		return true
-	}
-	if strings.Contains(message, "rate_limit") || strings.Contains(message, "rate limit") {
-		return true
-	}
-	if strings.Contains(message, "engine_overloaded") || strings.Contains(message, "overloaded") {
-		return true
-	}
-	return false
 }
 
 func liveM8WaitRuntimeEventWithOutcome(
@@ -303,8 +260,8 @@ func liveM8WaitRuntimeEventWithOutcome(
 			if event.Kind == kind {
 				return event
 			}
-		case err := <-outcome:
-			liveM8RunOrSkip(t, err)
+			case err := <-outcome:
+				liveRunOrSkip(t, err)
 			t.Fatalf("run completed before runtime event %q", kind)
 		case <-deadline.C:
 			t.Fatalf("timeout waiting runtime event kind %q", kind)

@@ -42,9 +42,7 @@ func TestLiveContextCompaction(t *testing.T) {
 	firstResult, err := engine.Run(ctx, types.ContentParts{
 		types.TextPart{Text: firstPrompt},
 	})
-	if err != nil {
-		t.Fatalf("first Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 	if output := strings.TrimSpace(liveTextFromContentParts(firstResult.Content)); output == "" {
 		t.Fatalf("first live response is empty: %#v", firstResult.Content)
 	}
@@ -54,9 +52,7 @@ func TestLiveContextCompaction(t *testing.T) {
 	secondResult, err := engine.Run(ctx, types.ContentParts{
 		types.TextPart{Text: secondPrompt},
 	})
-	if err != nil {
-		t.Fatalf("second Run() error = %v", err)
-	}
+	liveRunOrSkip(t, err)
 	secondOutput := strings.TrimSpace(liveTextFromContentParts(secondResult.Content))
 	if !containsCaseFold(secondOutput, "CONTEXT_STILL_OK") {
 		t.Fatalf("second live response = %q, want contains CONTEXT_STILL_OK", secondOutput)
@@ -161,10 +157,8 @@ func TestLiveSoulWithApprovalRuntime(t *testing.T) {
 		t.Fatalf("resolved decision = %v, want approve", *resolved.Record.Decision)
 	}
 
-	outcome := waitLiveRunOutcome(t, outcomeCh, 90*time.Second)
-	if outcome.err != nil {
-		t.Fatalf("Run() error = %v", outcome.err)
-	}
+	outcome := waitLiveRunOutcome(t, outcomeCh, 3*time.Minute)
+	liveRunOrSkip(t, outcome.err)
 
 	output := strings.TrimSpace(liveTextFromContentParts(outcome.result.Content))
 	if !containsCaseFold(output, token) {

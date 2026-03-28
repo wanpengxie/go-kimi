@@ -24,10 +24,7 @@ func IsRetryableTransportError(err error) bool {
 		return false
 	}
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return false
+	return errors.As(err, &netErr)
 }
 
 // SleepWithContext sleeps with cancellation support.
