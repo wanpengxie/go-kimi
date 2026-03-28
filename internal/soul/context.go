@@ -27,6 +27,7 @@ const (
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 	RoleTool      Role = "tool"
+	RoleSystem    Role = "system"
 )
 
 // Message is one logical context message.
@@ -104,7 +105,7 @@ func (c *SoulContext) Restore() error {
 		switch record.Role {
 		case roleUsage:
 			tokenCount = record.TokenCount
-		case string(RoleUser), string(RoleAssistant), string(RoleTool):
+		case string(RoleUser), string(RoleAssistant), string(RoleTool), string(RoleSystem):
 			messages = append(messages, Message{
 				Role:       Role(record.Role),
 				Content:    record.Content,
@@ -221,6 +222,64 @@ func (c *SoulContext) Clear() error {
 	return nil
 }
 
+// Replace replaces message history and token count both in memory and on disk.
+func (c *SoulContext) Replace(messages []Message, tokenCount int64) error {
+	if c == nil {
+		return errors.New("soul context: nil")
+	}
+
+	for i := range messages {
+		if err := validateMessage(messages[i]); err != nil {
+			return fmt.Errorf("soul context: replace message[%d]: %w", i, err)
+		}
+	}
+
+	path, err := c.filePath()
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("soul context: mkdir %q: %w", dir, err)
+		}
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("soul context: open %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("soul context: close %q: %w", path, err)
+	}
+
+	for i := range messages {
+		message := messages[i]
+		if err := appendRecord(path, contextRecord{
+			Role:       string(message.Role),
+			Content:    message.Content,
+			ToolCalls:  message.ToolCalls,
+			ToolCallID: message.ToolCallID,
+		}); err != nil {
+			return err
+		}
+	}
+
+	if tokenCount > 0 {
+		if err := appendRecord(path, contextRecord{
+			Role:       roleUsage,
+			TokenCount: tokenCount,
+		}); err != nil {
+			return err
+		}
+	}
+
+	c.messages = cloneMessages(messages)
+	c.tokenCount = tokenCount
+	return nil
+}
+
 func (c *SoulContext) filePath() (string, error) {
 	if c == nil {
 		return "", errors.New("soul context: nil")
@@ -234,7 +293,7 @@ func (c *SoulContext) filePath() (string, error) {
 
 func validateMessage(m Message) error {
 	switch m.Role {
-	case RoleUser, RoleAssistant, RoleTool:
+	case RoleUser, RoleAssistant, RoleTool, RoleSystem:
 	default:
 		return fmt.Errorf("soul context: invalid role %q", m.Role)
 	}

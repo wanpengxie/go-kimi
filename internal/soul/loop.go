@@ -53,11 +53,6 @@ func (s *Soul) run(ctx context.Context, input types.ContentParts) (StepResult, e
 			return StepResult{}, fmt.Errorf("soul run: append assistant message: %w", err)
 		}
 
-		if len(stepResult.ToolCalls) == 0 {
-			stopReason = "stop"
-			break
-		}
-
 		for i := range stepResult.ToolResults {
 			toolResult := stepResult.ToolResults[i]
 			toolCallID := strings.TrimSpace(toolResult.ToolCallID)
@@ -71,6 +66,15 @@ func (s *Soul) run(ctx context.Context, input types.ContentParts) (StepResult, e
 			}); err != nil {
 				return StepResult{}, fmt.Errorf("soul run: append tool message: %w", err)
 			}
+		}
+
+		if err := s.postStepCompaction(ctx); err != nil {
+			return StepResult{}, fmt.Errorf("soul run: post-step compaction: %w", err)
+		}
+
+		if len(stepResult.ToolCalls) == 0 {
+			stopReason = "stop"
+			break
 		}
 	}
 

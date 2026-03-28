@@ -44,6 +44,8 @@ type Soul struct {
 	registry     ToolRegistry
 	wire         wire.Emitter
 	approval     *ApprovalState
+	compactor    Compactor
+	compaction   CompactionConfig
 	systemPrompt string
 	maxSteps     int
 }
@@ -65,6 +67,8 @@ func NewSoul(
 		context:      ctx,
 		registry:     registry,
 		wire:         w,
+		compactor:    &SimpleCompaction{},
+		compaction:   defaultCompactionConfig(),
 		systemPrompt: strings.TrimSpace(systemPrompt),
 		maxSteps:     defaultMaxSteps,
 	}
@@ -135,6 +139,22 @@ func (s *Soul) SetApprovalRuntime(runtime *approvalruntime.ApprovalRuntime, sour
 	s.approval.SetRuntime(runtime, source)
 }
 
+// SetCompactor replaces the context compactor used by automatic compaction.
+func (s *Soul) SetCompactor(compactor Compactor) {
+	if s == nil {
+		return
+	}
+	s.compactor = compactor
+}
+
+// SetCompactionConfig configures automatic context compaction behavior.
+func (s *Soul) SetCompactionConfig(cfg CompactionConfig) {
+	if s == nil {
+		return
+	}
+	s.compaction = normalizeCompactionConfig(cfg)
+}
+
 func (s *Soul) ensureReady() error {
 	if s == nil {
 		return errors.New("soul: nil")
@@ -151,6 +171,7 @@ func (s *Soul) ensureReady() error {
 	if s.maxSteps < 1 {
 		s.maxSteps = defaultMaxSteps
 	}
+	s.compaction = normalizeCompactionConfig(s.compaction)
 	if s.approval == nil {
 		s.approval = NewApprovalState(s.emitApprovalRequest)
 	}

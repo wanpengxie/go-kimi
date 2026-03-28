@@ -19,6 +19,12 @@ func TestSoulContextAppendRestoreRoundTrip(t *testing.T) {
 
 	wantMessages := []Message{
 		{
+			Role: RoleSystem,
+			Content: types.ContentParts{
+				types.TextPart{Text: "summary"},
+			},
+		},
+		{
 			Role: RoleUser,
 			Content: types.ContentParts{
 				types.TextPart{Text: "hello"},
@@ -167,6 +173,52 @@ func TestSoulContextTokenCountUpdatePersistsLatest(t *testing.T) {
 	}
 }
 
+func TestSoulContextReplaceRewritesHistory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := NewSoulContext(dir)
+	if err := ctx.Append(Message{
+		Role:    RoleUser,
+		Content: types.ContentParts{types.TextPart{Text: "old user"}},
+	}); err != nil {
+		t.Fatalf("Append(old user) error = %v", err)
+	}
+	if err := ctx.Append(Message{
+		Role:    RoleAssistant,
+		Content: types.ContentParts{types.TextPart{Text: "old assistant"}},
+	}); err != nil {
+		t.Fatalf("Append(old assistant) error = %v", err)
+	}
+	ctx.UpdateTokenCount(10)
+
+	replacedMessages := []Message{
+		{
+			Role:    RoleSystem,
+			Content: types.ContentParts{types.TextPart{Text: "compressed summary"}},
+		},
+		{
+			Role:    RoleUser,
+			Content: types.ContentParts{types.TextPart{Text: "recent user"}},
+		},
+	}
+	if err := ctx.Replace(replacedMessages, 77); err != nil {
+		t.Fatalf("Replace() error = %v", err)
+	}
+
+	restored := NewSoulContext(dir)
+	if err := restored.Restore(); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+
+	if got := restored.Messages(); !reflect.DeepEqual(got, replacedMessages) {
+		t.Fatalf("restored messages mismatch\ngot = %#v\nwant = %#v", got, replacedMessages)
+	}
+	if got := restored.TokenCount(); got != 77 {
+		t.Fatalf("restored TokenCount() = %d, want %d", got, 77)
+	}
+}
+
 func TestSoulContextAppendValidation(t *testing.T) {
 	t.Parallel()
 
@@ -177,6 +229,12 @@ func TestSoulContextAppendValidation(t *testing.T) {
 		Content: types.ContentParts{types.TextPart{Text: "x"}},
 	}); err != nil {
 		t.Fatalf("Append(user) unexpected error = %v", err)
+	}
+	if err := ctx.Append(Message{
+		Role:    RoleSystem,
+		Content: types.ContentParts{types.TextPart{Text: "summary"}},
+	}); err != nil {
+		t.Fatalf("Append(system) unexpected error = %v", err)
 	}
 
 	if err := ctx.Append(Message{
