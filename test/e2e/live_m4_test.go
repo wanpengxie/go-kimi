@@ -144,8 +144,8 @@ func TestLiveForegroundSubagent(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("len(SubagentStore.List()) = %d, want 1", len(records))
 	}
-	if records[0].Status != subagents.StatusIdle {
-		t.Fatalf("subagent status = %q, want %q", records[0].Status, subagents.StatusIdle)
+	if records[0].Status != subagents.StatusCompleted {
+		t.Fatalf("subagent status = %q, want %q", records[0].Status, subagents.StatusCompleted)
 	}
 }
 

@@ -152,8 +152,8 @@ func TestScriptedForegroundSubagent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubagentStore.Get(%q) error = %v", agentID, err)
 	}
-	if record.Status != subagents.StatusIdle {
-		t.Fatalf("record.Status = %q, want %q", record.Status, subagents.StatusIdle)
+	if record.Status != subagents.StatusCompleted {
+		t.Fatalf("record.Status = %q, want %q", record.Status, subagents.StatusCompleted)
 	}
 
 	contextPayload, err := os.ReadFile(filepath.Join(s.SubagentsDir(), agentID, "context.jsonl"))
@@ -275,8 +275,8 @@ func TestScriptedBackgroundAgentTask(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("len(SubagentStore.List()) = %d, want 1", len(records))
 	}
-	if records[0].Status != subagents.StatusIdle {
-		t.Fatalf("subagent status = %q, want %q", records[0].Status, subagents.StatusIdle)
+	if records[0].Status != subagents.StatusCompleted {
+		t.Fatalf("subagent status = %q, want %q", records[0].Status, subagents.StatusCompleted)
 	}
 }
 
