@@ -12,6 +12,8 @@ import (
 const (
 	defaultMCPConfigDirName  = ".kimi"
 	defaultMCPConfigFileName = "mcp.json"
+	mcpConfigDirPerm         = 0o700
+	mcpConfigFilePerm        = 0o600
 )
 
 // LoadMCPConfig loads MCP server configs from a json file.
@@ -64,11 +66,11 @@ func SaveMCPConfig(path string, configs []MCPServerConfig) error {
 
 	dir := filepath.Dir(resolvedPath)
 	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, mcpConfigDirPerm); err != nil {
 			return fmt.Errorf("mcp config store: mkdir %q: %w", dir, err)
 		}
 	}
-	if err := os.WriteFile(resolvedPath, payload, 0o644); err != nil {
+	if err := writeFileAtomic(resolvedPath, payload, mcpConfigFilePerm); err != nil {
 		return fmt.Errorf("mcp config store: write %q: %w", resolvedPath, err)
 	}
 	return nil
@@ -127,6 +129,45 @@ func RemoveServer(path string, name string) error {
 // ListServers returns all MCP server configs in store.
 func ListServers(path string) ([]MCPServerConfig, error) {
 	return LoadMCPConfig(path)
+}
+
+func writeFileAtomic(path string, payload []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
+	}
+
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp for %q: %w", path, err)
+	}
+	tmpPath := tmpFile.Name()
+	cleanup := true
+	defer func() {
+		_ = tmpFile.Close()
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err := tmpFile.Chmod(perm); err != nil {
+		return fmt.Errorf("chmod temp %q: %w", tmpPath, err)
+	}
+	if _, err := tmpFile.Write(payload); err != nil {
+		return fmt.Errorf("write temp %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("fsync temp %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp %q: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename %q -> %q: %w", tmpPath, path, err)
+	}
+
+	cleanup = false
+	return nil
 }
 
 func resolveMCPConfigPath(path string) (string, error) {
