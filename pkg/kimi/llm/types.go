@@ -12,12 +12,16 @@ import (
 type ProviderType string
 
 const (
-	ProviderTypeMoonshot    ProviderType = "moonshot"
-	ProviderTypeOpenAI      ProviderType = "openai"
-	ProviderTypeAnthropic   ProviderType = "anthropic"
-	ProviderTypeGoogle      ProviderType = "google"
-	ProviderTypeAzureOpenAI ProviderType = "azure_openai"
-	ProviderTypeDeepSeek    ProviderType = "deepseek"
+	ProviderTypeKimi         ProviderType = "kimi"
+	ProviderTypeMoonshot     ProviderType = "moonshot"
+	ProviderTypeOpenAI       ProviderType = "openai"
+	ProviderTypeAnthropic    ProviderType = "anthropic"
+	ProviderTypeGemini       ProviderType = "gemini"
+	ProviderTypeGoogle       ProviderType = "google"
+	ProviderTypeAzureOpenAI  ProviderType = "azure_openai"
+	ProviderTypeDeepSeek     ProviderType = "deepseek"
+	ProviderTypeEcho         ProviderType = "echo"
+	ProviderTypeScriptedEcho ProviderType = "scripted_echo"
 )
 
 const longContextThreshold = 128000

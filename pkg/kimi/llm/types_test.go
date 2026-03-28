@@ -10,7 +10,7 @@ import (
 
 type stubProvider struct {
 	modelName string
-	effort    string
+	effort    ThinkingEffort
 }
 
 func (s stubProvider) ModelName() string {
@@ -22,7 +22,7 @@ func (s stubProvider) WithModel(model string) ChatProvider {
 	return s
 }
 
-func (s stubProvider) WithThinking(effort string) ChatProvider {
+func (s stubProvider) WithThinking(effort ThinkingEffort) ChatProvider {
 	s.effort = effort
 	return s
 }
@@ -47,12 +47,16 @@ func TestProviderTypeConstants(t *testing.T) {
 		got  ProviderType
 		want ProviderType
 	}{
+		{name: "kimi", got: ProviderTypeKimi, want: "kimi"},
 		{name: "moonshot", got: ProviderTypeMoonshot, want: "moonshot"},
 		{name: "openai", got: ProviderTypeOpenAI, want: "openai"},
 		{name: "anthropic", got: ProviderTypeAnthropic, want: "anthropic"},
+		{name: "gemini", got: ProviderTypeGemini, want: "gemini"},
 		{name: "google", got: ProviderTypeGoogle, want: "google"},
 		{name: "azure_openai", got: ProviderTypeAzureOpenAI, want: "azure_openai"},
 		{name: "deepseek", got: ProviderTypeDeepSeek, want: "deepseek"},
+		{name: "echo", got: ProviderTypeEcho, want: "echo"},
+		{name: "scripted_echo", got: ProviderTypeScriptedEcho, want: "scripted_echo"},
 	}
 
 	for _, tc := range tests {
