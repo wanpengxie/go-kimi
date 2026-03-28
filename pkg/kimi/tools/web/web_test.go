@@ -162,8 +162,12 @@ func TestFetchURLExecuteRejectsBlockedTargetHost(t *testing.T) {
 		"http://127.0.0.1/path",
 		"http://10.0.0.8/path",
 		"http://169.254.169.254/latest/meta-data",
+		"http://0.0.0.0/path",
+		"http://224.0.0.1/path",
 		"http://[::1]/path",
 		"http://[fc00::1]/path",
+		"http://[::]/path",
+		"http://[ff02::1]/path",
 	}
 
 	for i := range testCases {
@@ -199,6 +203,90 @@ func TestFetchURLExecuteRejectsHostnameResolvingToBlockedIP(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "blocked address") {
 		t.Fatalf("Execute() error = %v, want contains blocked address", err)
+	}
+}
+
+func TestFetchURLExecuteRejectsRedirectToBlockedHost(t *testing.T) {
+	t.Parallel()
+
+	const (
+		initialURL  = "http://public.example/start"
+		redirectURL = "http://127.0.0.1/private"
+	)
+
+	requestCount := 0
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requestCount++
+			if requestCount > 1 {
+				t.Fatalf("redirect target should be blocked before second round trip, got request to %q", req.URL.String())
+			}
+			if got := req.URL.String(); got != initialURL {
+				t.Fatalf("request URL = %q, want %q", got, initialURL)
+			}
+			resp := mockHTTPResponse(http.StatusFound, "text/plain", "redirect")
+			resp.Header.Set("Location", redirectURL)
+			resp.Request = req
+			return resp, nil
+		}),
+	})
+	tool.resolver = staticHostResolver{
+		"public.example": {
+			{IP: net.ParseIP("93.184.216.34")},
+		},
+	}
+
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url": initialURL,
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	output := resultOutputText(t, result)
+	if !strings.Contains(output, "127.0.0.1") || !strings.Contains(output, "not allowed") {
+		t.Fatalf("result output = %q, want contains blocked redirect address", output)
+	}
+}
+
+func TestFetchURLExecuteRejectsDNSRebindingInDialContext(t *testing.T) {
+	t.Parallel()
+
+	lookupCount := 0
+	tool := NewFetchURL(&http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	})
+	tool.resolver = hostLookupResolverFunc(func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host != "rebind.example" {
+			return nil, fmt.Errorf("unexpected host: %s", host)
+		}
+		lookupCount++
+		if lookupCount == 1 {
+			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
+		}
+		return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+	})
+
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url": "http://rebind.example/path",
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if lookupCount < 2 {
+		t.Fatalf("resolver lookup count = %d, want >= 2 to cover preflight + dial context", lookupCount)
+	}
+
+	output := resultOutputText(t, result)
+	if !strings.Contains(output, "127.0.0.1") || !strings.Contains(output, "blocked address") {
+		t.Fatalf("result output = %q, want contains blocked rebinding address", output)
 	}
 }
 
@@ -416,6 +504,12 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
+}
+
+type hostLookupResolverFunc func(ctx context.Context, host string) ([]net.IPAddr, error)
+
+func (fn hostLookupResolverFunc) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return fn(ctx, host)
 }
 
 type staticHostResolver map[string][]net.IPAddr

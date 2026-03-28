@@ -23,6 +23,7 @@ const (
 	fetchToolDescription = "Fetch one URL by HTTP GET and return extracted text content."
 
 	defaultFetchTimeout         = 30 * time.Second
+	defaultFetchDialTimeout     = 10 * time.Second
 	defaultFetchMaxContentBytes = 2 * 1024 * 1024
 	defaultChromeUserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
@@ -101,7 +102,8 @@ func (t *FetchURL) Execute(ctx context.Context, params json.RawMessage) (types.T
 	runCtx, cancel := context.WithTimeout(ctx, t.requestTimeout())
 	defer cancel()
 
-	if err := validateFetchTargetHost(runCtx, input.parsedURL, t.hostResolver()); err != nil {
+	resolver := t.hostResolver()
+	if err := validateFetchTargetHost(runCtx, input.parsedURL, resolver); err != nil {
 		return types.ToolResult{}, err
 	}
 
@@ -111,7 +113,7 @@ func (t *FetchURL) Execute(ctx context.Context, params json.RawMessage) (types.T
 	}
 	req.Header.Set("User-Agent", t.userAgent())
 
-	resp, err := t.httpClient().Do(req)
+	resp, err := t.httpClientWithNetworkGuards(resolver).Do(req)
 	if err != nil {
 		return buildErrorResult(fetchToolName, fmt.Sprintf("fetch_url: request failed: %v", err)), nil
 	}
@@ -216,7 +218,11 @@ func isBlockedFetchIP(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsUnspecified() ||
+		ip.IsMulticast()
 }
 
 func (t *FetchURL) httpClient() *http.Client {
@@ -231,6 +237,109 @@ func (t *FetchURL) hostResolver() hostLookupResolver {
 		return t.resolver
 	}
 	return net.DefaultResolver
+}
+
+func (t *FetchURL) httpClientWithNetworkGuards(resolver hostLookupResolver) *http.Client {
+	base := t.httpClient()
+	client := *base
+	client.CheckRedirect = wrapFetchCheckRedirect(base.CheckRedirect, resolver)
+
+	transport, ok := cloneFetchTransport(base.Transport)
+	if !ok {
+		return &client
+	}
+
+	transport.DialContext = newFetchDialContext(resolver)
+	client.Transport = transport
+	return &client
+}
+
+func wrapFetchCheckRedirect(
+	base func(req *http.Request, via []*http.Request) error,
+	resolver hostLookupResolver,
+) func(req *http.Request, via []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if err := validateFetchTargetHost(req.Context(), req.URL, resolver); err != nil {
+			return err
+		}
+		if base != nil {
+			return base(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+}
+
+func cloneFetchTransport(base http.RoundTripper) (*http.Transport, bool) {
+	if base == nil {
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, false
+		}
+		return defaultTransport.Clone(), true
+	}
+
+	transport, ok := base.(*http.Transport)
+	if !ok {
+		return nil, false
+	}
+	return transport.Clone(), true
+}
+
+func newFetchDialContext(
+	resolver hostLookupResolver,
+) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{
+		Timeout: defaultFetchDialTimeout,
+	}
+
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("fetch_url: split dial address %q: %w", addr, err)
+		}
+
+		ip, err := resolveFetchDialIP(ctx, resolver, host)
+		if err != nil {
+			return nil, err
+		}
+
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	}
+}
+
+func resolveFetchDialIP(ctx context.Context, resolver hostLookupResolver, host string) (net.IP, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return nil, errors.New("fetch_url: empty dial host")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil, errors.New("fetch_url: localhost is not allowed")
+	}
+
+	if ip := parseHostIP(host); ip != nil {
+		if isBlockedFetchIP(ip) {
+			return nil, fmt.Errorf("fetch_url: target address %s is not allowed", ip.String())
+		}
+		return ip, nil
+	}
+
+	resolved, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("fetch_url: resolve host %q: %w", host, err)
+	}
+	if len(resolved) == 0 {
+		return nil, fmt.Errorf("fetch_url: resolve host %q: no IP addresses found", host)
+	}
+
+	for i := range resolved {
+		if isBlockedFetchIP(resolved[i].IP) {
+			return nil, fmt.Errorf("fetch_url: target host %q resolves to blocked address %s", host, resolved[i].IP.String())
+		}
+	}
+	return resolved[0].IP, nil
 }
 
 func (t *FetchURL) userAgent() string {
