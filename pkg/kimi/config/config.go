@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +28,7 @@ const (
 
 	defaultDefaultThinking = "off"
 	defaultDefaultYolo     = true
+	redactedSecret         = "[REDACTED]"
 )
 
 // OAuthRef references an OAuth account.
@@ -48,7 +50,23 @@ func (s SecretStr) String() string {
 	if strings.TrimSpace(string(s)) == "" {
 		return ""
 	}
-	return "[REDACTED]"
+	return redactedSecret
+}
+
+// MarshalJSON redacts secret values when encoded as JSON.
+func (s SecretStr) MarshalJSON() ([]byte, error) {
+	if strings.TrimSpace(string(s)) == "" {
+		return []byte(`""`), nil
+	}
+	return json.Marshal(redactedSecret)
+}
+
+// MarshalText redacts secret values for text encoders.
+func (s SecretStr) MarshalText() ([]byte, error) {
+	if strings.TrimSpace(string(s)) == "" {
+		return []byte(""), nil
+	}
+	return []byte(redactedSecret), nil
 }
 
 // LLMProvider defines a provider endpoint and credentials.
@@ -223,6 +241,29 @@ type Config struct {
 	MCP             MCPConfig          `toml:"mcp" json:"mcp"`
 }
 
+type persistLLMProvider struct {
+	Name    string    `toml:"name"`
+	Type    string    `toml:"type"`
+	APIKey  string    `toml:"api_key,omitempty"`
+	BaseURL string    `toml:"base_url,omitempty"`
+	OAuth   *OAuthRef `toml:"oauth,omitempty"`
+}
+
+type persistConfig struct {
+	OAuth           OAuthRef             `toml:"oauth"`
+	Providers       []persistLLMProvider `toml:"providers"`
+	Models          []LLMModel           `toml:"models"`
+	DefaultProvider string               `toml:"default_provider,omitempty"`
+	DefaultModel    string               `toml:"default_model,omitempty"`
+	DefaultThinking string               `toml:"default_thinking,omitempty"`
+	DefaultYolo     bool                 `toml:"default_yolo"`
+	Loop            LoopControl          `toml:"loop"`
+	Background      BackgroundConfig     `toml:"background"`
+	Notification    NotificationConfig   `toml:"notification"`
+	Services        Services             `toml:"services"`
+	MCP             MCPConfig            `toml:"mcp"`
+}
+
 // NewDefaultLoopControl returns loop defaults.
 func NewDefaultLoopControl() LoopControl {
 	return LoopControl{
@@ -361,7 +402,7 @@ func SaveConfig(config Config, path string) error {
 	if err != nil {
 		return fmt.Errorf("save config %q: %w", path, err)
 	}
-	if err := toml.NewEncoder(file).Encode(config); err != nil {
+	if err := toml.NewEncoder(file).Encode(buildPersistConfig(config)); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("save config %q: encode toml: %w", path, err)
 	}
@@ -369,6 +410,34 @@ func SaveConfig(config Config, path string) error {
 		return fmt.Errorf("save config %q: close file: %w", path, err)
 	}
 	return nil
+}
+
+func buildPersistConfig(config Config) persistConfig {
+	providers := make([]persistLLMProvider, len(config.Providers))
+	for i := range config.Providers {
+		providers[i] = persistLLMProvider{
+			Name:    config.Providers[i].Name,
+			Type:    config.Providers[i].Type,
+			APIKey:  config.Providers[i].APIKey.Raw(),
+			BaseURL: config.Providers[i].BaseURL,
+			OAuth:   config.Providers[i].OAuth,
+		}
+	}
+
+	return persistConfig{
+		OAuth:           config.OAuth,
+		Providers:       providers,
+		Models:          config.Models,
+		DefaultProvider: config.DefaultProvider,
+		DefaultModel:    config.DefaultModel,
+		DefaultThinking: config.DefaultThinking,
+		DefaultYolo:     config.DefaultYolo,
+		Loop:            config.Loop,
+		Background:      config.Background,
+		Notification:    config.Notification,
+		Services:        config.Services,
+		MCP:             config.MCP,
+	}
 }
 
 // Validate validates the top-level config and nested structures.

@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -389,8 +390,70 @@ func TestSecretStrStringRedacts(t *testing.T) {
 	if got := secret.String(); got != "[REDACTED]" {
 		t.Fatalf("SecretStr.String() = %q, want [REDACTED]", got)
 	}
+	if got := fmt.Sprintf("%s", secret); got != "[REDACTED]" {
+		t.Fatalf("fmt.Sprintf(\"%%s\", SecretStr) = %q, want [REDACTED]", got)
+	}
+	text, err := secret.MarshalText()
+	if err != nil {
+		t.Fatalf("SecretStr.MarshalText() error = %v", err)
+	}
+	if got := string(text); got != "[REDACTED]" {
+		t.Fatalf("SecretStr.MarshalText() = %q, want [REDACTED]", got)
+	}
+	encoded, err := json.Marshal(secret)
+	if err != nil {
+		t.Fatalf("json.Marshal(SecretStr) error = %v", err)
+	}
+	if got := string(encoded); got != `"[REDACTED]"` {
+		t.Fatalf("json.Marshal(SecretStr) = %q, want %q", got, `"[REDACTED]"`)
+	}
 	if got := secret.Raw(); got != "top-secret" {
 		t.Fatalf("SecretStr.Raw() = %q, want top-secret", got)
+	}
+}
+
+func TestConfigJSONMarshalRedactsProviderAPIKey(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewDefaultConfig()
+	cfg.Providers[0].APIKey = "top-secret"
+
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("json.Marshal(config) error = %v", err)
+	}
+
+	payload := string(encoded)
+	if strings.Contains(payload, "top-secret") {
+		t.Fatalf("json payload leaked raw secret: %s", payload)
+	}
+	if !strings.Contains(payload, `"api_key":"[REDACTED]"`) {
+		t.Fatalf("json payload should contain redacted api_key, got: %s", payload)
+	}
+}
+
+func TestSaveConfigPersistsRawAPIKey(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewDefaultConfig()
+	cfg.Providers[0].APIKey = "top-secret"
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := SaveConfig(cfg, path); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+
+	content := string(raw)
+	if strings.Contains(content, "[REDACTED]") {
+		t.Fatalf("save config wrote redacted value, got: %s", content)
+	}
+	if !strings.Contains(content, `api_key = "top-secret"`) {
+		t.Fatalf("save config did not persist raw api_key, got: %s", content)
 	}
 }
 
