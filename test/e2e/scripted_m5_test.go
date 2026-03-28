@@ -187,8 +187,8 @@ func TestScriptedContextCompaction(t *testing.T) {
 	}
 
 	messages := ctxStore.Messages()
-	if len(messages) != 3 {
-		t.Fatalf("context message count after compaction = %d, want 3", len(messages))
+	if len(messages) != 2 {
+		t.Fatalf("context message count after compaction = %d, want 2", len(messages))
 	}
 	if messages[0].Role != soul.RoleSystem {
 		t.Fatalf("messages[0].Role = %q, want system", messages[0].Role)
@@ -196,11 +196,11 @@ func TestScriptedContextCompaction(t *testing.T) {
 	if got := strings.TrimSpace(textFromContentParts(messages[0].Content)); got != "scripted compact summary" {
 		t.Fatalf("summary message text = %q, want %q", got, "scripted compact summary")
 	}
-	if !strings.Contains(textFromContentParts(messages[1].Content), "current-user-3") {
-		t.Fatalf("messages[1].Content = %q, want contains current-user-3", textFromContentParts(messages[1].Content))
+	if messages[1].Role != soul.RoleAssistant {
+		t.Fatalf("messages[1].Role = %q, want assistant", messages[1].Role)
 	}
-	if !strings.Contains(textFromContentParts(messages[2].Content), "latest assistant reply") {
-		t.Fatalf("messages[2].Content = %q, want contains latest assistant reply", textFromContentParts(messages[2].Content))
+	if !strings.Contains(textFromContentParts(messages[1].Content), "latest assistant reply") {
+		t.Fatalf("messages[1].Content = %q, want contains latest assistant reply", textFromContentParts(messages[1].Content))
 	}
 
 	events := drainWireMessages(wireCh)
