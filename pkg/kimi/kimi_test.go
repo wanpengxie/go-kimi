@@ -10,6 +10,7 @@ import (
 	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
 func TestVersionIsSet(t *testing.T) {
@@ -94,6 +95,29 @@ func TestAgentRunReturnsMaxStepsReached(t *testing.T) {
 	}
 }
 
+func TestCompositeEmitter_PartialFailure(t *testing.T) {
+	t.Parallel()
+
+	fallbackErr := stdErrors.New("fallback failed")
+	fallback := &testWireEmitter{err: fallbackErr}
+	primary := &testWireEmitter{}
+
+	emitter := compositeEmitter{emitters: []wire.Emitter{fallback, primary}}
+	err := emitter.Emit(wire.TurnBegin{TurnID: "turn-1"})
+	if err == nil {
+		t.Fatal("Emit() error = nil, want joined fallback error")
+	}
+	if !stdErrors.Is(err, fallbackErr) {
+		t.Fatalf("Emit() error = %v, want contains fallback error", err)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
+	}
+	if primary.calls != 1 {
+		t.Fatalf("primary calls = %d, want 1 (must still run after fallback error)", primary.calls)
+	}
+}
+
 func testRuntimeConfig() config.Config {
 	cfg := config.NewDefaultConfig()
 	cfg.Providers = []config.LLMProvider{
@@ -142,4 +166,17 @@ func (p *loopingProvider) ChatStream(_ context.Context, _ llm.ChatRequest) (<-ch
 	ch <- llm.ChatEvent{Done: true}
 	close(ch)
 	return ch, nil
+}
+
+type testWireEmitter struct {
+	calls int
+	err   error
+}
+
+func (e *testWireEmitter) Emit(_ wire.WireMessage) error {
+	if e == nil {
+		return nil
+	}
+	e.calls++
+	return e.err
 }

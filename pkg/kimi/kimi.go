@@ -928,16 +928,17 @@ type compositeEmitter struct {
 }
 
 func (e compositeEmitter) Emit(msg wire.WireMessage) error {
+	var errs []error
 	for i := range e.emitters {
 		emitter := e.emitters[i]
 		if emitter == nil {
 			continue
 		}
 		if err := emitter.Emit(msg); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return stdErrors.Join(errs...)
 }
 
 func composeEmitters(primary wire.Emitter, fallback wire.Emitter) wire.Emitter {

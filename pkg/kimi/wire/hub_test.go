@@ -3,6 +3,7 @@ package wire
 import (
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +61,89 @@ func TestHubPublishDropsWhenSubscriberBufferIsFull(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("subscriber did not receive first buffered message")
+	}
+}
+
+func TestHub_ConcurrentPublishUnsubscribe(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(1)
+	defer hub.Close()
+
+	stableSub := hub.Subscribe()
+	done := make(chan struct{})
+	panicCh := make(chan any, 1)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			case _, ok := <-stableSub:
+				if !ok {
+					return
+				}
+			}
+		}
+	}()
+
+	startPublisher := func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					select {
+					case panicCh <- recovered:
+					default:
+					}
+				}
+			}()
+
+			msg := TextDelta{TurnID: "turn-1", Delta: "delta"}
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					hub.Publish(msg)
+				}
+			}
+		}()
+	}
+
+	startMutator := func() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					sub := hub.Subscribe()
+					hub.Unsubscribe(sub)
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < 4; i++ {
+		startPublisher()
+		startMutator()
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	close(done)
+	wg.Wait()
+
+	select {
+	case recovered := <-panicCh:
+		t.Fatalf("Publish panicked under concurrent unsubscribe/close: %v", recovered)
+	default:
 	}
 }
 

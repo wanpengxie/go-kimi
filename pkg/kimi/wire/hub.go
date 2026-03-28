@@ -80,20 +80,14 @@ func (h *Hub) Publish(msg WireMessage) {
 	}
 
 	h.mu.RLock()
+	defer h.mu.RUnlock()
+
 	if h.closed || len(h.subscribers) == 0 {
-		h.mu.RUnlock()
 		return
 	}
-
-	subscribers := make([]chan WireMessage, 0, len(h.subscribers))
 	for _, subscriber := range h.subscribers {
-		subscribers = append(subscribers, subscriber)
-	}
-	h.mu.RUnlock()
-
-	for i := range subscribers {
 		select {
-		case subscribers[i] <- msg:
+		case subscriber <- msg:
 		default:
 		}
 	}
