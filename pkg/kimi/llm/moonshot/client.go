@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+	llmhttputil "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/internal/httputil"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -317,8 +317,8 @@ func (c *MoonshotClient) doRequestWithRetry(ctx context.Context, payload []byte,
 		client := c.httpClientForMode(stream)
 		resp, err := client.Do(req)
 		if err != nil {
-			if attempt < attempts && isRetryableTransportError(err) {
-				if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+			if attempt < attempts && llmhttputil.IsRetryableTransportError(err) {
+				if sleepErr := llmhttputil.SleepWithContext(ctx, backoff); sleepErr != nil {
 					return nil, sleepErr
 				}
 				backoff *= 2
@@ -327,9 +327,9 @@ func (c *MoonshotClient) doRequestWithRetry(ctx context.Context, payload []byte,
 			return nil, fmt.Errorf("moonshot request: %w", err)
 		}
 
-		if isRetryableStatusCode(resp.StatusCode) && attempt < attempts {
-			discardAndClose(resp.Body)
-			if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+		if llmhttputil.IsRetryableStatusCode(resp.StatusCode) && attempt < attempts {
+			llmhttputil.DiscardAndClose(resp.Body)
+			if sleepErr := llmhttputil.SleepWithContext(ctx, backoff); sleepErr != nil {
 				return nil, sleepErr
 			}
 			backoff *= 2
@@ -337,8 +337,8 @@ func (c *MoonshotClient) doRequestWithRetry(ctx context.Context, payload []byte,
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			message := strings.TrimSpace(readBodyForError(resp.Body))
-			discardAndClose(resp.Body)
+			message := strings.TrimSpace(llmhttputil.ReadBodyForError(resp.Body))
+			llmhttputil.DiscardAndClose(resp.Body)
 			if message == "" {
 				message = http.StatusText(resp.StatusCode)
 			}
@@ -352,19 +352,7 @@ func (c *MoonshotClient) doRequestWithRetry(ctx context.Context, payload []byte,
 }
 
 func (c *MoonshotClient) httpClientForMode(stream bool) *http.Client {
-	if c.httpClient == nil {
-		if stream {
-			return &http.Client{}
-		}
-		return &http.Client{Timeout: defaultRequestTO}
-	}
-	if !stream {
-		return c.httpClient
-	}
-
-	clone := *c.httpClient
-	clone.Timeout = 0
-	return &clone
+	return llmhttputil.ClientForMode(c.httpClient, stream, defaultRequestTO)
 }
 
 func (c *MoonshotClient) endpointURL() string {
@@ -676,53 +664,6 @@ func decodeTokenUsage(usage *chatCompletionUsage) types.TokenUsage {
 		OutputTokens: usage.CompletionTokens,
 		TotalTokens:  usage.TotalTokens,
 	}
-}
-
-func isRetryableStatusCode(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests || statusCode >= 500
-}
-
-func isRetryableTransportError(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return true
-}
-
-func sleepWithContext(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func readBodyForError(body io.Reader) string {
-	if body == nil {
-		return ""
-	}
-	limited := io.LimitReader(body, 128*1024)
-	payload, err := io.ReadAll(limited)
-	if err != nil {
-		return ""
-	}
-	return string(payload)
-}
-
-func discardAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, body)
-	_ = body.Close()
 }
 
 type chatCompletionRequest struct {

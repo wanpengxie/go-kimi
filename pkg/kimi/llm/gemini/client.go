@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+	llmhttputil "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/internal/httputil"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -353,9 +353,9 @@ func (c *GeminiClient) doRequestWithRetry(ctx context.Context, payload []byte, s
 		client := c.httpClientForMode(stream)
 		resp, err := client.Do(req)
 		if err != nil {
-			if attempt < attempts && isRetryableTransportError(err) {
+			if attempt < attempts && llmhttputil.IsRetryableTransportError(err) {
 				lastErr = fmt.Errorf("gemini request: transport error: %w", err)
-				if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+				if sleepErr := llmhttputil.SleepWithContext(ctx, backoff); sleepErr != nil {
 					return nil, sleepErr
 				}
 				backoff *= 2
@@ -371,13 +371,13 @@ func (c *GeminiClient) doRequestWithRetry(ctx context.Context, payload []byte, s
 		statusErr := fmt.Errorf(
 			"gemini request: status %d: %s",
 			resp.StatusCode,
-			strings.TrimSpace(readBodyForError(resp.Body)),
+			strings.TrimSpace(llmhttputil.ReadBodyForError(resp.Body)),
 		)
-		discardAndClose(resp.Body)
+		llmhttputil.DiscardAndClose(resp.Body)
 
-		if attempt < attempts && isRetryableStatusCode(resp.StatusCode) {
+		if attempt < attempts && llmhttputil.IsRetryableStatusCode(resp.StatusCode) {
 			lastErr = statusErr
-			if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+			if sleepErr := llmhttputil.SleepWithContext(ctx, backoff); sleepErr != nil {
 				return nil, sleepErr
 			}
 			backoff *= 2
@@ -393,19 +393,7 @@ func (c *GeminiClient) doRequestWithRetry(ctx context.Context, payload []byte, s
 }
 
 func (c *GeminiClient) httpClientForMode(stream bool) *http.Client {
-	if c.httpClient == nil {
-		if stream {
-			return &http.Client{Timeout: 0}
-		}
-		return &http.Client{Timeout: defaultRequestTO}
-	}
-	if !stream {
-		return c.httpClient
-	}
-
-	clone := *c.httpClient
-	clone.Timeout = 0
-	return &clone
+	return llmhttputil.ClientForMode(c.httpClient, stream, defaultRequestTO)
 }
 
 func (c *GeminiClient) endpointURL(stream bool) string {
@@ -909,53 +897,6 @@ func normalizeJSONObject(value types.JsonType) map[string]any {
 		return object
 	}
 	return map[string]any{"value": normalized}
-}
-
-func isRetryableStatusCode(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests || statusCode >= 500
-}
-
-func isRetryableTransportError(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return true
-}
-
-func sleepWithContext(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func readBodyForError(body io.Reader) string {
-	if body == nil {
-		return ""
-	}
-	limited := io.LimitReader(body, 128*1024)
-	payload, err := io.ReadAll(limited)
-	if err != nil {
-		return ""
-	}
-	return string(payload)
-}
-
-func discardAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, body)
-	_ = body.Close()
 }
 
 func streamToolKey(candidateIndex, partIndex int, call *functionCall) string {

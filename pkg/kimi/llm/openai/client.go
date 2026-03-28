@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+	llmhttputil "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/internal/httputil"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -35,12 +35,13 @@ type OpenAIClient struct {
 	baseURL        string
 	model          string
 	httpClient     *http.Client
-	thinkingEffort string
+	thinkingEffort llm.ThinkingEffort
 	maxAttempts    int
 	initialBackoff time.Duration
 }
 
 var _ llm.ChatProvider = (*OpenAIClient)(nil)
+var _ llm.ThinkingProvider = (*OpenAIClient)(nil)
 
 // NewOpenAIClient creates an OpenAI HTTP client with sensible defaults.
 func NewOpenAIClient(apiKey, baseURL, model string) *OpenAIClient {
@@ -58,6 +59,7 @@ func NewOpenAIClient(apiKey, baseURL, model string) *OpenAIClient {
 		baseURL:        normalizedBaseURL,
 		model:          normalizedModel,
 		httpClient:     &http.Client{Timeout: defaultRequestTO},
+		thinkingEffort: llm.ThinkingOff,
 		maxAttempts:    defaultMaxAttempts,
 		initialBackoff: defaultInitialBackoff,
 	}
@@ -89,12 +91,12 @@ func (c *OpenAIClient) WithModel(model string) llm.ChatProvider {
 }
 
 // WithThinking returns a cloned provider with updated thinking effort.
-func (c *OpenAIClient) WithThinking(effort string) llm.ChatProvider {
+func (c *OpenAIClient) WithThinking(effort llm.ThinkingEffort) llm.ChatProvider {
 	if c == nil {
 		return c
 	}
 	cloned := *c
-	cloned.thinkingEffort = strings.TrimSpace(effort)
+	cloned.thinkingEffort = llm.NormalizeThinkingEffort(effort)
 	return &cloned
 }
 
@@ -316,8 +318,8 @@ func (c *OpenAIClient) doRequestWithRetry(ctx context.Context, payload []byte, s
 		client := c.httpClientForMode(stream)
 		resp, err := client.Do(req)
 		if err != nil {
-			if attempt < attempts && isRetryableTransportError(err) {
-				if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+			if attempt < attempts && llmhttputil.IsRetryableTransportError(err) {
+				if sleepErr := llmhttputil.SleepWithContext(ctx, backoff); sleepErr != nil {
 					return nil, sleepErr
 				}
 				backoff *= 2
@@ -326,9 +328,9 @@ func (c *OpenAIClient) doRequestWithRetry(ctx context.Context, payload []byte, s
 			return nil, fmt.Errorf("openai request: %w", err)
 		}
 
-		if isRetryableStatusCode(resp.StatusCode) && attempt < attempts {
-			discardAndClose(resp.Body)
-			if sleepErr := sleepWithContext(ctx, backoff); sleepErr != nil {
+		if llmhttputil.IsRetryableStatusCode(resp.StatusCode) && attempt < attempts {
+			llmhttputil.DiscardAndClose(resp.Body)
+			if sleepErr := llmhttputil.SleepWithContext(ctx, backoff); sleepErr != nil {
 				return nil, sleepErr
 			}
 			backoff *= 2
@@ -336,8 +338,8 @@ func (c *OpenAIClient) doRequestWithRetry(ctx context.Context, payload []byte, s
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			message := strings.TrimSpace(readBodyForError(resp.Body))
-			discardAndClose(resp.Body)
+			message := strings.TrimSpace(llmhttputil.ReadBodyForError(resp.Body))
+			llmhttputil.DiscardAndClose(resp.Body)
 			if message == "" {
 				message = http.StatusText(resp.StatusCode)
 			}
@@ -351,19 +353,7 @@ func (c *OpenAIClient) doRequestWithRetry(ctx context.Context, payload []byte, s
 }
 
 func (c *OpenAIClient) httpClientForMode(stream bool) *http.Client {
-	if c.httpClient == nil {
-		if stream {
-			return &http.Client{}
-		}
-		return &http.Client{Timeout: defaultRequestTO}
-	}
-	if !stream {
-		return c.httpClient
-	}
-
-	clone := *c.httpClient
-	clone.Timeout = 0
-	return &clone
+	return llmhttputil.ClientForMode(c.httpClient, stream, defaultRequestTO)
 }
 
 func (c *OpenAIClient) endpointURL() string {
@@ -416,8 +406,8 @@ func (c *OpenAIClient) buildChatCompletionRequest(req llm.ChatRequest, stream bo
 	if stream {
 		request.StreamOptions = &chatCompletionStreamOptions{IncludeUsage: true}
 	}
-	if effort := strings.TrimSpace(c.thinkingEffort); effort != "" {
-		request.ReasoningEffort = effort
+	if effort := llm.NormalizeThinkingEffort(c.thinkingEffort); effort != llm.ThinkingOff {
+		request.ReasoningEffort = string(effort)
 	}
 
 	return request
@@ -647,53 +637,6 @@ func decodeTokenUsage(usage *chatCompletionUsage) types.TokenUsage {
 		OutputTokens: usage.CompletionTokens,
 		TotalTokens:  usage.TotalTokens,
 	}
-}
-
-func isRetryableStatusCode(statusCode int) bool {
-	return statusCode == http.StatusTooManyRequests || statusCode >= 500
-}
-
-func isRetryableTransportError(err error) bool {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-	return true
-}
-
-func sleepWithContext(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func readBodyForError(body io.Reader) string {
-	if body == nil {
-		return ""
-	}
-	limited := io.LimitReader(body, 128*1024)
-	payload, err := io.ReadAll(limited)
-	if err != nil {
-		return ""
-	}
-	return string(payload)
-}
-
-func discardAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, body)
-	_ = body.Close()
 }
 
 type chatCompletionRequest struct {

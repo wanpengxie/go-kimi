@@ -68,6 +68,26 @@ func TestOpenAIClientWithModelClonesProvider(t *testing.T) {
 	}
 }
 
+func TestOpenAIClientSupportsLLMWithThinking(t *testing.T) {
+	t.Parallel()
+
+	client := NewOpenAIClient("test-key", "https://example.com/v1", "gpt-4o-mini")
+	next := llm.WithThinking(client, " HIGH ")
+	typed, ok := next.(*OpenAIClient)
+	if !ok {
+		t.Fatalf("llm.WithThinking() type = %T, want *OpenAIClient", next)
+	}
+	if typed == client {
+		t.Fatal("llm.WithThinking() returned same pointer, want clone")
+	}
+	if typed.thinkingEffort != llm.ThinkingHigh {
+		t.Fatalf("thinking effort = %q, want %q", typed.thinkingEffort, llm.ThinkingHigh)
+	}
+	if client.thinkingEffort != llm.ThinkingOff {
+		t.Fatalf("original thinking effort = %q, want %q", client.thinkingEffort, llm.ThinkingOff)
+	}
+}
+
 func TestOpenAIClientChat(t *testing.T) {
 	t.Parallel()
 
