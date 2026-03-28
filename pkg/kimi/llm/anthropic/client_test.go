@@ -3,7 +3,6 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -503,7 +502,23 @@ type flakyTransport struct {
 
 func (t *flakyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if atomic.AddInt32(&t.remainingFailures, -1) >= 0 {
-		return nil, errors.New("temporary network failure")
+		return nil, retryableTransportError{msg: "temporary network failure"}
 	}
 	return t.next.RoundTrip(req)
+}
+
+type retryableTransportError struct {
+	msg string
+}
+
+func (e retryableTransportError) Error() string {
+	return e.msg
+}
+
+func (e retryableTransportError) Timeout() bool {
+	return false
+}
+
+func (e retryableTransportError) Temporary() bool {
+	return true
 }

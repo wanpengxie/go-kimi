@@ -19,11 +19,15 @@ func IsRetryableTransportError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return false
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return true
 	}
-	return true
+	return false
 }
 
 // SleepWithContext sleeps with cancellation support.
