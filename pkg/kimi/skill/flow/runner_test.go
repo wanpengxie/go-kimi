@@ -93,3 +93,33 @@ func TestRunnerRepromptsInvalidDecisionChoice(t *testing.T) {
 		t.Fatalf("second prompt = %q, want retry hint", prompts[1])
 	}
 }
+
+func TestRunnerBeginSelfLoopStillRespectsMaxMoves(t *testing.T) {
+	t.Parallel()
+
+	graph := &Flow{
+		Nodes: map[string]FlowNode{
+			"BEGIN": {ID: "BEGIN", Label: "BEGIN", Kind: NodeKindBegin},
+			"END":   {ID: "END", Label: "END", Kind: NodeKindEnd},
+		},
+		Outgoing: map[string][]FlowEdge{
+			"BEGIN": {{Src: "BEGIN", Dst: "BEGIN"}},
+			"END":   nil,
+		},
+		BeginID: "BEGIN",
+		EndID:   "END",
+	}
+
+	turnCalled := false
+	runner := Runner{Flow: graph, MaxMoves: 3}
+	_, err := runner.Run(context.Background(), func(_ context.Context, _ string) (string, error) {
+		turnCalled = true
+		return "", nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "reached max moves limit 3") {
+		t.Fatalf("Run() error = %v, want max moves limit", err)
+	}
+	if turnCalled {
+		t.Fatal("turn executor should not be called when BEGIN loops to itself")
+	}
+}

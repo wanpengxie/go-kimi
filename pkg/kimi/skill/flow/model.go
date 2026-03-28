@@ -96,6 +96,14 @@ func Validate(nodes map[string]FlowNode, outgoing map[string][]FlowEdge) (string
 	beginID := beginIDs[0]
 	endID := endIDs[0]
 
+	for _, edges := range outgoing {
+		for _, edge := range edges {
+			if edge.Dst == beginID {
+				return "", "", &ValidationError{Message: fmt.Sprintf("BEGIN node %q cannot be a destination", beginID)}
+			}
+		}
+	}
+
 	reachable := make(map[string]struct{}, len(nodes))
 	queue := []string{beginID}
 	for len(queue) > 0 {

@@ -180,3 +180,34 @@ func TestParseChoiceLastMatch(t *testing.T) {
 		t.Fatalf("ParseChoice() = %q, want empty", got)
 	}
 }
+
+func TestValidateRejectsEdgeTargetingBegin(t *testing.T) {
+	t.Parallel()
+
+	nodes := map[string]FlowNode{
+		"BEGIN": {ID: "BEGIN", Label: "BEGIN", Kind: NodeKindBegin},
+		"A":     {ID: "A", Label: "task", Kind: NodeKindTask},
+		"END":   {ID: "END", Label: "END", Kind: NodeKindEnd},
+	}
+	outgoing := map[string][]FlowEdge{
+		"BEGIN": {{Src: "BEGIN", Dst: "A"}},
+		"A": {
+			{Src: "A", Dst: "BEGIN"},
+			{Src: "A", Dst: "END", Label: "done"},
+		},
+		"END": nil,
+	}
+
+	_, _, err := Validate(nodes, outgoing)
+	if err == nil {
+		t.Fatal("Validate() error = nil, want BEGIN destination validation error")
+	}
+
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("error type = %T, want *ValidationError", err)
+	}
+	if !strings.Contains(validationErr.Error(), "cannot be a destination") {
+		t.Fatalf("Validate() error = %v, want BEGIN destination detail", validationErr)
+	}
+}

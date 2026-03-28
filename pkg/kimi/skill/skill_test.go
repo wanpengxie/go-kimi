@@ -77,24 +77,21 @@ TASK --> END
 	}
 }
 
-func TestParseSkillMarkdownFlowParseFailureFallsBackToStandard(t *testing.T) {
+func TestParseSkillMarkdownFlowParseFailureReturnsError(t *testing.T) {
 	t.Parallel()
 
-	sk, err := parseSkillMarkdown("/tmp/skills/broken-flow", `---
+	_, err := parseSkillMarkdown("/tmp/skills/broken-flow", `---
 name: broken-flow
 type: flow
 ---
 `+"```mermaid\n"+`flowchart TD
 A --> B
 `+"```\n")
-	if err != nil {
-		t.Fatalf("parseSkillMarkdown() error = %v", err)
+	if err == nil {
+		t.Fatal("parseSkillMarkdown() error = nil, want flow parse failure")
 	}
-	if sk.Type != "standard" {
-		t.Fatalf("skill.Type = %q, want standard fallback", sk.Type)
-	}
-	if sk.Flow != nil {
-		t.Fatalf("skill.Flow = %#v, want nil", sk.Flow)
+	if !strings.Contains(err.Error(), "parse flow graph") {
+		t.Fatalf("parseSkillMarkdown() error = %v, want flow parse context", err)
 	}
 }
 

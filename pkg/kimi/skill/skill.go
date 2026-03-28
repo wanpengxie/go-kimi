@@ -69,12 +69,10 @@ func parseSkillMarkdown(dir, markdown string) (*Skill, error) {
 	var parsedFlow *skillflow.Flow
 	if skillType == flowType {
 		flowGraph, flowErr := parseFlowFromSkill(markdown)
-		if flowErr == nil {
-			parsedFlow = flowGraph
-		} else {
-			// Keep the skill loadable and degrade to standard type when flow diagram is invalid.
-			skillType = standardType
+		if flowErr != nil {
+			return nil, fmt.Errorf("skill: parse flow graph: %w", flowErr)
 		}
+		parsedFlow = flowGraph
 	}
 
 	return &Skill{

@@ -60,7 +60,16 @@ func (r Runner) Run(ctx context.Context, runTurn TurnFunc) (string, error) {
 			if len(edges) == 0 {
 				return "", fmt.Errorf("flow runner: BEGIN node %q has no outgoing edges", node.ID)
 			}
+			if moves >= maxMoves {
+				return "", fmt.Errorf("flow runner: reached max moves limit %d", maxMoves)
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			default:
+			}
 			currentID = edges[0].Dst
+			moves++
 			continue
 		}
 
