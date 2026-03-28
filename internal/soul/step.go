@@ -1,12 +1,14 @@
 package soul
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"text/template"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
@@ -18,8 +20,13 @@ func (s *Soul) step(ctx context.Context, turnID string) (StepResult, error) {
 		return StepResult{}, err
 	}
 
+	messages, err := s.buildChatMessages(ctx)
+	if err != nil {
+		return StepResult{}, err
+	}
+
 	stream, err := s.provider.ChatStream(ctx, llm.ChatRequest{
-		Messages: s.buildChatMessages(),
+		Messages: messages,
 		Tools:    s.toolDefinitions(),
 	})
 	if err != nil {
@@ -153,14 +160,24 @@ func (s *Soul) lookupExecutor(name string) (ToolExecutor, bool) {
 	return s.registry.Executor(strings.TrimSpace(name))
 }
 
-func (s *Soul) buildChatMessages() []llm.Message {
+func (s *Soul) buildChatMessages(ctx context.Context) ([]llm.Message, error) {
 	history := s.context.Messages()
+	history = normalizeHistory(history)
+	if injected := s.runPreStepHooks(ctx, history); len(injected) > 0 {
+		history = append(history, injected...)
+		history = normalizeHistory(history)
+	}
+
 	messages := make([]llm.Message, 0, len(history)+1)
-	if s.systemPrompt != "" {
+	systemPrompt, err := s.renderSystemPrompt()
+	if err != nil {
+		return nil, err
+	}
+	if systemPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role: "system",
 			Content: types.ContentParts{
-				types.TextPart{Text: s.systemPrompt},
+				types.TextPart{Text: systemPrompt},
 			},
 		})
 	}
@@ -173,7 +190,123 @@ func (s *Soul) buildChatMessages() []llm.Message {
 			ToolCallID: strings.TrimSpace(history[i].ToolCallID),
 		})
 	}
-	return messages
+	return messages, nil
+}
+
+func (s *Soul) runPreStepHooks(ctx context.Context, history []Message) []Message {
+	hooks := s.preStepHooksSnapshot()
+	if len(hooks) == 0 {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	out := make([]Message, 0, 4)
+	for i := range hooks {
+		if hooks[i] == nil {
+			continue
+		}
+
+		injected := hooks[i](ctx, cloneMessages(history))
+		if len(injected) == 0 {
+			continue
+		}
+		for j := range injected {
+			msg := sanitizeHookMessage(injected[j])
+			if msg == nil {
+				continue
+			}
+			out = append(out, *msg)
+		}
+	}
+	return out
+}
+
+func sanitizeHookMessage(msg Message) *Message {
+	msg.Role = Role(strings.TrimSpace(string(msg.Role)))
+	msg.ToolCallID = strings.TrimSpace(msg.ToolCallID)
+	if err := validateMessage(msg); err != nil {
+		return nil
+	}
+	msg.Content = cloneContentParts(msg.Content)
+	msg.ToolCalls = cloneToolCalls(msg.ToolCalls)
+	return &msg
+}
+
+func (s *Soul) renderSystemPrompt() (string, error) {
+	prompt := strings.TrimSpace(s.systemPrompt)
+	if prompt == "" {
+		return "", nil
+	}
+	if !strings.Contains(prompt, "{{") {
+		return prompt, nil
+	}
+
+	tpl, err := template.New("system_prompt").Option("missingkey=zero").Parse(prompt)
+	if err != nil {
+		return "", fmt.Errorf("soul step: parse system prompt template: %w", err)
+	}
+
+	var buffer bytes.Buffer
+	if err := tpl.Execute(&buffer, s.resolveTemplateData()); err != nil {
+		return "", fmt.Errorf("soul step: render system prompt template: %w", err)
+	}
+	return strings.TrimSpace(buffer.String()), nil
+}
+
+func normalizeHistory(history []Message) []Message {
+	if len(history) == 0 {
+		return nil
+	}
+
+	out := make([]Message, 0, len(history))
+	for i := range history {
+		current := cloneMessage(history[i])
+		if len(out) == 0 {
+			out = append(out, current)
+			continue
+		}
+
+		last := &out[len(out)-1]
+		if !canMergeMessages(*last, current) {
+			out = append(out, current)
+			continue
+		}
+
+		last.Content = append(cloneContentParts(last.Content), cloneContentParts(current.Content)...)
+		last.ToolCalls = append(cloneToolCalls(last.ToolCalls), cloneToolCalls(current.ToolCalls)...)
+	}
+	return out
+}
+
+func canMergeMessages(left, right Message) bool {
+	if left.Role != right.Role {
+		return false
+	}
+
+	leftToolCallID := strings.TrimSpace(left.ToolCallID)
+	rightToolCallID := strings.TrimSpace(right.ToolCallID)
+	if leftToolCallID != rightToolCallID {
+		return false
+	}
+
+	if left.Role == RoleTool && leftToolCallID == "" {
+		return false
+	}
+	if left.Role != RoleTool && leftToolCallID != "" {
+		return false
+	}
+	return true
+}
+
+func cloneMessage(message Message) Message {
+	return Message{
+		Role:       message.Role,
+		Content:    cloneContentParts(message.Content),
+		ToolCalls:  cloneToolCalls(message.ToolCalls),
+		ToolCallID: strings.TrimSpace(message.ToolCallID),
+	}
 }
 
 func (s *Soul) toolDefinitions() []llm.ToolDefinition {

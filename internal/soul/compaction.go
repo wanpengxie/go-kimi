@@ -33,16 +33,19 @@ type Compactor interface {
 
 // CompactionConfig defines automatic compaction behavior.
 type CompactionConfig struct {
-	Enabled        bool
-	TriggerRatio   float64
-	MaxContextSize int
-	ReservedSize   int
+	Enabled           bool
+	TriggerRatio      float64
+	MaxContextSize    int
+	ReservedSize      int
+	CustomInstruction string
+	IncludeThinkParts bool
 }
 
 // SimpleCompaction keeps recent rounds and summarizes older messages via provider.Chat.
 type SimpleCompaction struct {
-	PreserveLastN int
-	Instruction   string
+	PreserveLastN     int
+	Instruction       string
+	IncludeThinkParts bool
 }
 
 func (c *SimpleCompaction) Compact(ctx context.Context, messages []Message, provider llm.ChatProvider) (CompactionResult, error) {
@@ -77,6 +80,10 @@ func (c *SimpleCompaction) Compact(ctx context.Context, messages []Message, prov
 
 	toCompact := history[:boundary]
 	preserved := history[boundary:]
+	includeThinkParts := false
+	if c != nil && c.IncludeThinkParts {
+		includeThinkParts = true
+	}
 
 	summaryInstruction := strings.TrimSpace(defaultCompactionInstruction)
 	if c != nil && strings.TrimSpace(c.Instruction) != "" {
@@ -94,7 +101,7 @@ func (c *SimpleCompaction) Compact(ctx context.Context, messages []Message, prov
 			{
 				Role: "user",
 				Content: types.ContentParts{
-					types.TextPart{Text: buildCompactionPrompt(toCompact)},
+					types.TextPart{Text: buildCompactionPrompt(toCompact, includeThinkParts)},
 				},
 			},
 		},
@@ -146,7 +153,17 @@ func (s *Soul) postStepCompaction(ctx context.Context) error {
 		return err
 	}
 
-	result, err := s.compactor.Compact(ctx, messages, s.provider)
+	compactor := s.compactor
+	if simpleCompactor, ok := compactor.(*SimpleCompaction); ok && simpleCompactor != nil {
+		cloned := *simpleCompactor
+		if cfg.CustomInstruction != "" {
+			cloned.Instruction = cfg.CustomInstruction
+		}
+		cloned.IncludeThinkParts = cfg.IncludeThinkParts
+		compactor = &cloned
+	}
+
+	result, err := compactor.Compact(ctx, messages, s.provider)
 	if err != nil {
 		return fmt.Errorf("soul compaction: %w", err)
 	}
@@ -172,10 +189,11 @@ func (s *Soul) postStepCompaction(ctx context.Context) error {
 
 func defaultCompactionConfig() CompactionConfig {
 	return CompactionConfig{
-		Enabled:        true,
-		TriggerRatio:   defaultCompactionTriggerRatio,
-		MaxContextSize: defaultCompactionMaxContext,
-		ReservedSize:   defaultCompactionReserved,
+		Enabled:           true,
+		TriggerRatio:      defaultCompactionTriggerRatio,
+		MaxContextSize:    defaultCompactionMaxContext,
+		ReservedSize:      defaultCompactionReserved,
+		IncludeThinkParts: false,
 	}
 }
 
@@ -189,6 +207,7 @@ func normalizeCompactionConfig(cfg CompactionConfig) CompactionConfig {
 	if cfg.ReservedSize < 0 {
 		cfg.ReservedSize = 0
 	}
+	cfg.CustomInstruction = strings.TrimSpace(cfg.CustomInstruction)
 	return cfg
 }
 
@@ -202,16 +221,19 @@ func shouldAutoCompact(tokenCount int64, maxContext int, triggerRatio float64, r
 	if reserved < 0 {
 		reserved = 0
 	}
-
-	effectiveMax := maxContext - reserved
-	if effectiveMax <= 0 {
+	if reserved >= maxContext {
 		return false
 	}
-	return float64(tokenCount)/float64(effectiveMax) >= triggerRatio
+
+	remaining := maxContext - int(tokenCount)
+	if remaining <= reserved {
+		return true
+	}
+	return float64(tokenCount)/float64(maxContext) >= triggerRatio
 }
 
 func estimateContextTokens(messages []Message) int64 {
-	payload := renderMessagesForCompaction(messages)
+	payload := renderMessagesForCompaction(messages, true)
 	if payload == "" {
 		return 0
 	}
@@ -226,25 +248,25 @@ func compactionBoundary(messages []Message, preserveLastN int) int {
 		return len(messages)
 	}
 
-	userRoundStarts := make([]int, 0, len(messages))
+	roundStarts := make([]int, 0, len(messages))
 	for i := range messages {
-		if messages[i].Role == RoleUser {
-			userRoundStarts = append(userRoundStarts, i)
+		if messages[i].Role == RoleUser || messages[i].Role == RoleAssistant {
+			roundStarts = append(roundStarts, i)
 		}
 	}
-	if len(userRoundStarts) == 0 || preserveLastN >= len(userRoundStarts) {
+	if len(roundStarts) == 0 || preserveLastN >= len(roundStarts) {
 		return 0
 	}
-	return userRoundStarts[len(userRoundStarts)-preserveLastN]
+	return roundStarts[len(roundStarts)-preserveLastN]
 }
 
-func buildCompactionPrompt(messages []Message) string {
+func buildCompactionPrompt(messages []Message, includeThinkParts bool) string {
 	return "Summarize the following conversation history as context for the next assistant turn.\n" +
 		"Keep durable facts, key decisions, constraints, and unresolved tasks.\n\n" +
-		renderMessagesForCompaction(messages)
+		renderMessagesForCompaction(messages, includeThinkParts)
 }
 
-func renderMessagesForCompaction(messages []Message) string {
+func renderMessagesForCompaction(messages []Message, includeThinkParts bool) string {
 	if len(messages) == 0 {
 		return ""
 	}
@@ -253,7 +275,7 @@ func renderMessagesForCompaction(messages []Message) string {
 	for i := range messages {
 		records = append(records, contextRecord{
 			Role:       string(messages[i].Role),
-			Content:    cloneContentParts(messages[i].Content),
+			Content:    filterCompactionContent(messages[i].Content, includeThinkParts),
 			ToolCalls:  cloneToolCalls(messages[i].ToolCalls),
 			ToolCallID: strings.TrimSpace(messages[i].ToolCallID),
 		})
@@ -271,6 +293,26 @@ func renderMessagesForCompaction(messages []Message) string {
 		builder.Write(line)
 	}
 	return builder.String()
+}
+
+func filterCompactionContent(parts types.ContentParts, includeThinkParts bool) types.ContentParts {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make(types.ContentParts, 0, len(parts))
+	for i := range parts {
+		switch parts[i].(type) {
+		case types.ThinkPart, *types.ThinkPart:
+			if !includeThinkParts {
+				continue
+			}
+		}
+		out = append(out, parts[i])
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return cloneContentParts(out)
 }
 
 func compactionSummary(messages []Message) (string, types.ContentParts) {

@@ -318,6 +318,392 @@ func TestSoulRunStopsAtMaxSteps(t *testing.T) {
 	}
 }
 
+func TestSoulRunRetriesTransientStepError(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "retry success"}},
+				{Done: true},
+			},
+		},
+		streamErrs: []error{
+			errors.New("temporary stream failure"),
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	s := NewSoul(provider, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.SetStepRetryConfig(StepRetryConfig{MaxRetries: 1})
+
+	result, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "hello"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if provider.CallCount() != 2 {
+		t.Fatalf("provider.CallCount() = %d, want 2", provider.CallCount())
+	}
+	if got := strings.TrimSpace(contentPartsText(result.Content)); got != "retry success" {
+		t.Fatalf("result content = %q, want %q", got, "retry success")
+	}
+
+	events := drainWireMessages(wireCh)
+	hasRetryEvent := false
+	for i := range events {
+		interrupted, ok := events[i].(wire.StepInterrupted)
+		if !ok {
+			continue
+		}
+		hasRetryEvent = true
+		if !strings.Contains(interrupted.Reason, "retry 1/1") {
+			t.Fatalf("StepInterrupted.Reason = %q, want contains retry 1/1", interrupted.Reason)
+		}
+	}
+	if !hasRetryEvent {
+		t.Fatalf("wire events missing StepInterrupted retry event: %#v", events)
+	}
+}
+
+func TestSoulRunAppliesSteerInputBetweenSteps(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{ID: "call-1", Name: "wait"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "final response"}},
+				{Done: true},
+			},
+		},
+	}
+
+	gate := make(chan struct{})
+	registry := mockRegistry{
+		executors: map[string]ToolExecutor{
+			"wait": executorFunc(func(_ context.Context, call types.ToolCall) (types.ToolResult, error) {
+				<-gate
+				return types.ToolResult{
+					ToolCallID: call.ID,
+					Name:       call.Name,
+					Value: types.ToolReturnValue{
+						Value: map[string]any{"ok": true},
+					},
+				}, nil
+			}),
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 32)
+	s := NewSoul(provider, ctxStore, registry, wire.ChannelEmitter{Ch: wireCh}, "")
+
+	type runOutcome struct {
+		result StepResult
+		err    error
+	}
+	outcomeCh := make(chan runOutcome, 1)
+	go func() {
+		result, err := s.Run(context.Background(), types.ContentParts{
+			types.TextPart{Text: "first input"},
+		})
+		outcomeCh <- runOutcome{result: result, err: err}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for provider.CallCount() < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if provider.CallCount() < 1 {
+		t.Fatal("provider never started first step")
+	}
+
+	steerCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := s.Steer(steerCtx, "steer input from user"); err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	close(gate)
+
+	var outcome runOutcome
+	select {
+	case outcome = <-outcomeCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Run() completion")
+	}
+	if outcome.err != nil {
+		t.Fatalf("Run() error = %v", outcome.err)
+	}
+	if got := strings.TrimSpace(contentPartsText(outcome.result.Content)); got != "final response" {
+		t.Fatalf("result content = %q, want %q", got, "final response")
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(requests))
+	}
+	hasSteerMessage := false
+	for i := range requests[1].Messages {
+		if requests[1].Messages[i].Role != "user" {
+			continue
+		}
+		if strings.Contains(contentPartsText(requests[1].Messages[i].Content), "steer input from user") {
+			hasSteerMessage = true
+			break
+		}
+	}
+	if !hasSteerMessage {
+		t.Fatalf("second request missing steer message: %#v", requests[1].Messages)
+	}
+
+	events := drainWireMessages(wireCh)
+	hasSteerEvent := false
+	for i := range events {
+		steer, ok := events[i].(wire.SteerInput)
+		if !ok {
+			continue
+		}
+		hasSteerEvent = true
+		if steer.Text != "steer input from user" {
+			t.Fatalf("SteerInput.Text = %q, want %q", steer.Text, "steer input from user")
+		}
+	}
+	if !hasSteerEvent {
+		t.Fatalf("wire events missing SteerInput: %#v", events)
+	}
+
+	messages := ctxStore.Messages()
+	if len(messages) != 5 {
+		t.Fatalf("context message count = %d, want 5", len(messages))
+	}
+}
+
+func TestSoulBuildChatMessagesTemplateAndHookNormalization(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Delta: types.TextPart{Text: "done"}},
+				{Done: true},
+			},
+		},
+	}
+
+	s := NewSoul(
+		provider,
+		ctxStore,
+		mockRegistry{},
+		wire.NoopEmitter{},
+		"workdir={{.WorkDir}};skills={{.Skills}};plan={{.PlanMode}};slug={{.PlanSlug}}",
+	)
+	s.ClearPreStepHooks()
+	s.AddPreStepHook(func(_ context.Context, _ []Message) []Message {
+		return []Message{
+			{
+				Role: RoleUser,
+				Content: types.ContentParts{
+					types.TextPart{Text: "hook detail"},
+				},
+			},
+		}
+	})
+	s.SetSystemPromptTemplateData(SystemPromptTemplateData{
+		WorkDir: "/tmp/worktree",
+		Skills:  "alpha,beta",
+	})
+	s.SetPlanModeState(PlanModeState{
+		Active: true,
+		Slug:   "plan-2026",
+	})
+
+	if _, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "base input"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("provider request count = %d, want 1", len(requests))
+	}
+	if len(requests[0].Messages) != 2 {
+		t.Fatalf("request message count = %d, want 2", len(requests[0].Messages))
+	}
+	systemPrompt := contentPartsText(requests[0].Messages[0].Content)
+	if !strings.Contains(systemPrompt, "workdir=/tmp/worktree") {
+		t.Fatalf("system prompt = %q, want contains workdir", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "skills=alpha,beta") {
+		t.Fatalf("system prompt = %q, want contains skills", systemPrompt)
+	}
+	if !strings.Contains(systemPrompt, "plan=true") || !strings.Contains(systemPrompt, "slug=plan-2026") {
+		t.Fatalf("system prompt = %q, want contains plan fields", systemPrompt)
+	}
+
+	userMsg := requests[0].Messages[1]
+	if userMsg.Role != "user" {
+		t.Fatalf("request user role = %q, want user", userMsg.Role)
+	}
+	if len(userMsg.Content) != 2 {
+		t.Fatalf("normalized user content parts = %d, want 2", len(userMsg.Content))
+	}
+	if got := contentPartsText(userMsg.Content); !strings.Contains(got, "base input") || !strings.Contains(got, "hook detail") {
+		t.Fatalf("user content = %q, want merged base+hook", got)
+	}
+}
+
+func TestSoulPlanModeHookInjectsReminder(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Delta: types.TextPart{Text: "ok"}},
+				{Done: true},
+			},
+		},
+	}
+
+	s := NewSoul(provider, ctxStore, mockRegistry{}, wire.NoopEmitter{}, "")
+	s.SetPlanModeState(PlanModeState{
+		Active:    true,
+		SessionID: "session-61",
+		Slug:      "plan-61",
+	})
+
+	if _, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "hello"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 1 {
+		t.Fatalf("provider request count = %d, want 1", len(requests))
+	}
+	hasPlanReminder := false
+	for i := range requests[0].Messages {
+		text := contentPartsText(requests[0].Messages[i].Content)
+		if strings.Contains(text, "Plan mode is active") && strings.Contains(text, "plan-61") {
+			hasPlanReminder = true
+			break
+		}
+	}
+	if !hasPlanReminder {
+		t.Fatalf("request messages missing plan reminder: %#v", requests[0].Messages)
+	}
+}
+
+func TestSoulYoloHookInjectsReminderOncePerTurn(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{ID: "call-1", Name: "echo"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "step-2"}},
+				{Done: true},
+			},
+		},
+	}
+	registry := mockRegistry{
+		executors: map[string]ToolExecutor{
+			"echo": executorFunc(func(_ context.Context, call types.ToolCall) (types.ToolResult, error) {
+				return types.ToolResult{
+					ToolCallID: call.ID,
+					Name:       call.Name,
+					Value: types.ToolReturnValue{
+						Value: map[string]any{"ok": true},
+					},
+				}, nil
+			}),
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	s := NewSoul(provider, ctxStore, registry, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.SetYolo(false)
+
+	type runOutcome struct {
+		result StepResult
+		err    error
+	}
+	outcomeCh := make(chan runOutcome, 1)
+	go func() {
+		result, err := s.Run(context.Background(), types.ContentParts{
+			types.TextPart{Text: "start"},
+		})
+		outcomeCh <- runOutcome{result: result, err: err}
+	}()
+
+	var approvalReq wire.ApprovalRequest
+	gotApprovalReq := false
+	deadline := time.After(time.Second)
+	for !gotApprovalReq {
+		select {
+		case msg := <-wireCh:
+			request, ok := msg.(wire.ApprovalRequest)
+			if !ok {
+				continue
+			}
+			approvalReq = request
+			gotApprovalReq = true
+		case <-deadline:
+			t.Fatal("timeout waiting for approval request")
+		}
+	}
+
+	if err := s.RespondApproval(approvalReq.ID, ApprovalApprove, ""); err != nil {
+		t.Fatalf("RespondApproval() error = %v", err)
+	}
+
+	select {
+	case outcome := <-outcomeCh:
+		if outcome.err != nil {
+			t.Fatalf("Run() error = %v", outcome.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for Run() completion")
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(requests))
+	}
+
+	hasReminder := func(messages []llm.Message) bool {
+		for i := range messages {
+			if !strings.Contains(contentPartsText(messages[i].Content), "Tool approvals are required in this turn") {
+				continue
+			}
+			return true
+		}
+		return false
+	}
+	if !hasReminder(requests[0].Messages) {
+		t.Fatalf("first request missing yolo reminder: %#v", requests[0].Messages)
+	}
+	if hasReminder(requests[1].Messages) {
+		t.Fatalf("second request unexpectedly repeats yolo reminder: %#v", requests[1].Messages)
+	}
+}
+
 func TestSoulStepToolExecutorErrorBecomesToolResult(t *testing.T) {
 	t.Parallel()
 
@@ -475,8 +861,9 @@ func TestSoulStepApprovalRejectSkipsExecutor(t *testing.T) {
 }
 
 type scriptedChatProvider struct {
-	streams [][]llm.ChatEvent
-	chatErr error
+	streams    [][]llm.ChatEvent
+	chatErr    error
+	streamErrs []error
 
 	mu       sync.Mutex
 	requests []llm.ChatRequest
@@ -510,11 +897,18 @@ func (p *scriptedChatProvider) ChatStream(_ context.Context, req llm.ChatRequest
 	p.requests = append(p.requests, cloneChatRequest(req))
 	index := p.calls
 	p.calls++
+	var streamErr error
+	if index < len(p.streamErrs) {
+		streamErr = p.streamErrs[index]
+	}
 	events := []llm.ChatEvent{{Done: true}}
 	if index < len(p.streams) {
 		events = p.streams[index]
 	}
 	p.mu.Unlock()
+	if streamErr != nil {
+		return nil, streamErr
+	}
 
 	ch := make(chan llm.ChatEvent, len(events))
 	for i := range events {

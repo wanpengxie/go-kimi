@@ -34,7 +34,7 @@ func TestSimpleCompactionPreservesRecentRounds(t *testing.T) {
 		},
 	}
 
-	result, err := (&SimpleCompaction{PreserveLastN: 2, Instruction: "custom"}).Compact(context.Background(), history, provider)
+	result, err := (&SimpleCompaction{PreserveLastN: 4, Instruction: "custom"}).Compact(context.Background(), history, provider)
 	if err != nil {
 		t.Fatalf("Compact() error = %v", err)
 	}
@@ -112,7 +112,8 @@ func TestShouldAutoCompact(t *testing.T) {
 	}{
 		{name: "meets threshold", tokenCount: 800, maxContext: 1000, triggerRatio: 0.8, reserved: 0, want: true},
 		{name: "below threshold", tokenCount: 799, maxContext: 1000, triggerRatio: 0.8, reserved: 0, want: false},
-		{name: "reserved space considered", tokenCount: 640, maxContext: 1000, triggerRatio: 0.8, reserved: 200, want: true},
+		{name: "reserved hard line reached", tokenCount: 810, maxContext: 1000, triggerRatio: 0.95, reserved: 200, want: true},
+		{name: "reserved not reached and ratio below", tokenCount: 640, maxContext: 1000, triggerRatio: 0.8, reserved: 200, want: false},
 		{name: "invalid max context", tokenCount: 100, maxContext: 0, triggerRatio: 0.8, reserved: 0, want: false},
 		{name: "invalid token count", tokenCount: 0, maxContext: 1000, triggerRatio: 0.8, reserved: 0, want: false},
 		{name: "default ratio fallback", tokenCount: 8, maxContext: 10, triggerRatio: 0, reserved: 0, want: true},
@@ -269,6 +270,108 @@ func TestSoulRunCompactionSummaryFailureIsFailOpen(t *testing.T) {
 	}
 	if !hasTurnEnd {
 		t.Fatalf("wire events missing TurnEnd: %#v", events)
+	}
+}
+
+func TestCompactionBoundaryCountsUserAndAssistant(t *testing.T) {
+	t.Parallel()
+
+	history := []Message{
+		{Role: RoleUser, Content: types.ContentParts{types.TextPart{Text: "u1"}}},
+		{Role: RoleAssistant, Content: types.ContentParts{types.TextPart{Text: "a1"}}},
+		{Role: RoleUser, Content: types.ContentParts{types.TextPart{Text: "u2"}}},
+		{Role: RoleAssistant, Content: types.ContentParts{types.TextPart{Text: "a2"}}},
+		{Role: RoleUser, Content: types.ContentParts{types.TextPart{Text: "u3"}}},
+		{Role: RoleAssistant, Content: types.ContentParts{types.TextPart{Text: "a3"}}},
+	}
+
+	if got := compactionBoundary(history, 2); got != 4 {
+		t.Fatalf("compactionBoundary(..., 2) = %d, want 4", got)
+	}
+	if got := compactionBoundary(history, 1); got != 5 {
+		t.Fatalf("compactionBoundary(..., 1) = %d, want 5", got)
+	}
+}
+
+func TestBuildCompactionPromptFiltersThinkPartsByDefault(t *testing.T) {
+	t.Parallel()
+
+	history := []Message{
+		{
+			Role: RoleAssistant,
+			Content: types.ContentParts{
+				types.TextPart{Text: "public text"},
+				types.ThinkPart{Think: "internal reasoning"},
+			},
+		},
+	}
+
+	promptWithoutThink := buildCompactionPrompt(history, false)
+	if strings.Contains(promptWithoutThink, "internal reasoning") {
+		t.Fatalf("buildCompactionPrompt(..., false) contains think payload: %q", promptWithoutThink)
+	}
+	if !strings.Contains(promptWithoutThink, "public text") {
+		t.Fatalf("buildCompactionPrompt(..., false) missing public text: %q", promptWithoutThink)
+	}
+
+	promptWithThink := buildCompactionPrompt(history, true)
+	if !strings.Contains(promptWithThink, "internal reasoning") {
+		t.Fatalf("buildCompactionPrompt(..., true) missing think payload: %q", promptWithThink)
+	}
+}
+
+func TestSoulCompactionConfigCustomInstructionOverridesSimpleCompactorInstruction(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &compactionProvider{
+		response: &llm.ChatResponse{
+			Content: types.ContentParts{
+				types.TextPart{Text: "compacted"},
+			},
+		},
+	}
+
+	engine := NewSoul(provider, ctxStore, mockRegistry{}, wire.NoopEmitter{}, "")
+	engine.SetCompactionConfig(CompactionConfig{
+		Enabled:           true,
+		TriggerRatio:      0.5,
+		MaxContextSize:    20,
+		ReservedSize:      0,
+		CustomInstruction: "CUSTOM_INSTRUCTION_2026",
+	})
+	engine.SetCompactor(&SimpleCompaction{
+		PreserveLastN: -1,
+		Instruction:   "base instruction",
+	})
+
+	if err := ctxStore.Append(Message{
+		Role: RoleUser,
+		Content: types.ContentParts{
+			types.TextPart{Text: strings.Repeat("u", 512)},
+		},
+	}); err != nil {
+		t.Fatalf("Append(user) error = %v", err)
+	}
+	if err := ctxStore.Append(Message{
+		Role: RoleAssistant,
+		Content: types.ContentParts{
+			types.TextPart{Text: strings.Repeat("a", 512)},
+		},
+	}); err != nil {
+		t.Fatalf("Append(assistant) error = %v", err)
+	}
+
+	if err := engine.postStepCompaction(context.Background()); err != nil {
+		t.Fatalf("postStepCompaction() error = %v", err)
+	}
+
+	if len(provider.requests) == 0 {
+		t.Fatal("provider.Chat requests = 0, want >= 1 for compaction summary")
+	}
+	gotInstruction := contentPartsText(provider.requests[0].Messages[0].Content)
+	if gotInstruction != "CUSTOM_INSTRUCTION_2026" {
+		t.Fatalf("summary instruction = %q, want %q", gotInstruction, "CUSTOM_INSTRUCTION_2026")
 	}
 }
 

@@ -265,6 +265,34 @@ func (c *SoulContext) Replace(messages []Message, tokenCount int64) error {
 	return nil
 }
 
+// Checkpoint returns one checkpoint id for the current in-memory history.
+func (c *SoulContext) Checkpoint() int {
+	if c == nil {
+		return 0
+	}
+	return len(c.messages)
+}
+
+// RevertTo rewinds history to one checkpoint id and persists the truncation.
+func (c *SoulContext) RevertTo(checkpointID int) error {
+	if c == nil {
+		return errors.New("soul context: nil")
+	}
+	if checkpointID < 0 || checkpointID > len(c.messages) {
+		return fmt.Errorf("soul context: invalid checkpoint %d", checkpointID)
+	}
+	if checkpointID == len(c.messages) {
+		return nil
+	}
+
+	truncated := cloneMessages(c.messages[:checkpointID])
+	tokenCount := estimateContextTokens(truncated)
+	if err := c.Replace(truncated, tokenCount); err != nil {
+		return fmt.Errorf("soul context: revert checkpoint %d: %w", checkpointID, err)
+	}
+	return nil
+}
+
 func (c *SoulContext) filePath() (string, error) {
 	if c == nil {
 		return "", errors.New("soul context: nil")

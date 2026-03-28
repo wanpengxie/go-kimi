@@ -3,6 +3,7 @@ package soul
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -23,6 +24,9 @@ func (s *Soul) run(ctx context.Context, input types.ContentParts) (StepResult, e
 	}
 
 	turnID := newTurnID()
+	s.beginTurnRuntime(turnID)
+	defer s.endTurnRuntime(turnID)
+
 	if err := s.emit(wire.TurnBegin{
 		TurnID: turnID,
 		Input:  cloneContentParts(input),
@@ -40,7 +44,9 @@ func (s *Soul) run(ctx context.Context, input types.ContentParts) (StepResult, e
 	stopReason := "max_steps"
 	finalResult := StepResult{}
 	for stepIndex := 0; stepIndex < s.maxSteps; stepIndex++ {
-		stepResult, err := s.step(ctx, turnID)
+		s.setCurrentStep(stepIndex + 1)
+
+		stepResult, err := s.stepWithRetry(ctx, turnID, stepIndex+1)
 		if err != nil {
 			return StepResult{}, err
 		}
@@ -71,6 +77,14 @@ func (s *Soul) run(ctx context.Context, input types.ContentParts) (StepResult, e
 
 		if err := s.postStepCompaction(ctx); err != nil {
 			s.handleCompactionFailure(err)
+		}
+
+		steerApplied, err := s.consumeSteerInputs(turnID)
+		if err != nil {
+			return StepResult{}, err
+		}
+		if steerApplied {
+			continue
 		}
 
 		if len(stepResult.ToolCalls) == 0 {
@@ -124,6 +138,85 @@ func usagePtr(usage types.TokenUsage) *types.TokenUsage {
 
 func newTurnID() string {
 	return fmt.Sprintf("turn-%d", time.Now().UTC().UnixNano())
+}
+
+func (s *Soul) stepWithRetry(ctx context.Context, turnID string, stepIndex int) (StepResult, error) {
+	if s == nil {
+		return StepResult{}, errors.New("soul run: nil")
+	}
+
+	cfg := s.stepRetryConfigSnapshot()
+	var lastErr error
+	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
+		result, err := s.step(ctx, turnID)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+
+		if attempt >= cfg.MaxRetries || !shouldRetryStepError(err) {
+			break
+		}
+
+		reason := fmt.Sprintf("step %d retry %d/%d: %v", stepIndex, attempt+1, cfg.MaxRetries, err)
+		if emitErr := s.emit(wire.StepInterrupted{
+			StepID: fmt.Sprintf("%s-step-%d", turnID, stepIndex),
+			Reason: reason,
+		}); emitErr != nil {
+			return StepResult{}, emitErr
+		}
+	}
+	return StepResult{}, fmt.Errorf("soul run: step %d failed after %d retries: %w", stepIndex, cfg.MaxRetries, lastErr)
+}
+
+func shouldRetryStepError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
+}
+
+func (s *Soul) consumeSteerInputs(turnID string) (bool, error) {
+	if s == nil || s.steerCh == nil {
+		return false, nil
+	}
+
+	turnID = strings.TrimSpace(turnID)
+	consumed := false
+	for {
+		select {
+		case request := <-s.steerCh:
+			if strings.TrimSpace(request.TurnID) != turnID {
+				continue
+			}
+
+			text := strings.TrimSpace(request.Text)
+			if text == "" {
+				continue
+			}
+
+			consumed = true
+			if err := s.context.Append(Message{
+				Role: RoleUser,
+				Content: types.ContentParts{
+					types.TextPart{Text: text},
+				},
+			}); err != nil {
+				return consumed, fmt.Errorf("soul run: append steer message: %w", err)
+			}
+			if err := s.emit(wire.SteerInput{
+				Text:     text,
+				Priority: strings.TrimSpace(request.Priority),
+			}); err != nil {
+				return consumed, err
+			}
+		default:
+			return consumed, nil
+		}
+	}
 }
 
 func (s *Soul) handleCompactionFailure(err error) {

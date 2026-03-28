@@ -20,6 +20,9 @@ type SessionState struct {
 	Yolo               bool            `json:"yolo"`
 	AutoApproveActions map[string]bool `json:"auto_approve_actions,omitempty"`
 	AdditionalDirs     []string        `json:"additional_dirs,omitempty"`
+	PlanMode           bool            `json:"plan_mode,omitempty"`
+	PlanSessionID      string          `json:"plan_session_id,omitempty"`
+	PlanSlug           string          `json:"plan_slug,omitempty"`
 }
 
 // NewSessionState returns default session state.
@@ -109,6 +112,9 @@ func normalizeSessionState(state *SessionState) *SessionState {
 		Yolo:               state.Yolo,
 		AutoApproveActions: make(map[string]bool, len(state.AutoApproveActions)),
 		AdditionalDirs:     append([]string(nil), state.AdditionalDirs...),
+		PlanMode:           state.PlanMode,
+		PlanSessionID:      strings.TrimSpace(state.PlanSessionID),
+		PlanSlug:           strings.TrimSpace(state.PlanSlug),
 	}
 	for action, approved := range state.AutoApproveActions {
 		normalized.AutoApproveActions[action] = approved

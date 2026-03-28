@@ -173,6 +173,79 @@ func TestSoulContextTokenCountUpdatePersistsLatest(t *testing.T) {
 	}
 }
 
+func TestSoulContextCheckpointAndRevert(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := NewSoulContext(dir)
+
+	if err := ctx.Append(Message{
+		Role:    RoleUser,
+		Content: types.ContentParts{types.TextPart{Text: strings.Repeat("u", 32)}},
+	}); err != nil {
+		t.Fatalf("Append(user) error = %v", err)
+	}
+	if err := ctx.Append(Message{
+		Role:    RoleAssistant,
+		Content: types.ContentParts{types.TextPart{Text: strings.Repeat("a", 32)}},
+	}); err != nil {
+		t.Fatalf("Append(assistant) error = %v", err)
+	}
+	checkpoint := ctx.Checkpoint()
+	if checkpoint != 2 {
+		t.Fatalf("Checkpoint() = %d, want 2", checkpoint)
+	}
+
+	if err := ctx.Append(Message{
+		Role:    RoleUser,
+		Content: types.ContentParts{types.TextPart{Text: "late input"}},
+	}); err != nil {
+		t.Fatalf("Append(late user) error = %v", err)
+	}
+
+	if err := ctx.RevertTo(checkpoint); err != nil {
+		t.Fatalf("RevertTo(%d) error = %v", checkpoint, err)
+	}
+
+	wantMessages := []Message{
+		{Role: RoleUser, Content: types.ContentParts{types.TextPart{Text: strings.Repeat("u", 32)}}},
+		{Role: RoleAssistant, Content: types.ContentParts{types.TextPart{Text: strings.Repeat("a", 32)}}},
+	}
+	if got := ctx.Messages(); !reflect.DeepEqual(got, wantMessages) {
+		t.Fatalf("Messages() after RevertTo mismatch\ngot = %#v\nwant = %#v", got, wantMessages)
+	}
+
+	restored := NewSoulContext(dir)
+	if err := restored.Restore(); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if got := restored.Messages(); !reflect.DeepEqual(got, wantMessages) {
+		t.Fatalf("restored messages after RevertTo mismatch\ngot = %#v\nwant = %#v", got, wantMessages)
+	}
+	if restored.TokenCount() <= 0 {
+		t.Fatalf("TokenCount() after RevertTo = %d, want > 0", restored.TokenCount())
+	}
+}
+
+func TestSoulContextRevertRejectsInvalidCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	ctx := NewSoulContext(t.TempDir())
+	if err := ctx.Append(Message{
+		Role:    RoleUser,
+		Content: types.ContentParts{types.TextPart{Text: "hello"}},
+	}); err != nil {
+		t.Fatalf("Append(user) error = %v", err)
+	}
+
+	if err := ctx.RevertTo(-1); err == nil || !strings.Contains(err.Error(), "invalid checkpoint") {
+		t.Fatalf("RevertTo(-1) error = %v, want invalid checkpoint", err)
+	}
+	if err := ctx.RevertTo(2); err == nil || !strings.Contains(err.Error(), "invalid checkpoint") {
+		t.Fatalf("RevertTo(2) error = %v, want invalid checkpoint", err)
+	}
+}
+
 func TestSoulContextReplaceRewritesHistory(t *testing.T) {
 	t.Parallel()
 

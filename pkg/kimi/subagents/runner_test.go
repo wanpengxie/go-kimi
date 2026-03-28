@@ -209,9 +209,12 @@ func TestForegroundSubagentRunnerRunFailureSetsStatusFailed(t *testing.T) {
 	})
 
 	provider := &scriptedChatProvider{
-		streams: [][]llm.ChatEvent{{
-			{Err: errors.New("stream failed")},
-		}},
+		streams: [][]llm.ChatEvent{
+			{{Err: errors.New("stream failed")}},
+			{{Err: errors.New("stream failed")}},
+			{{Err: errors.New("stream failed")}},
+			{{Err: errors.New("stream failed")}},
+		},
 	}
 	runner := NewForegroundSubagentRunner(RunnerDeps{
 		Market:         market,
