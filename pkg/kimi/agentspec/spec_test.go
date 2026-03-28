@@ -1,6 +1,7 @@
 package agentspec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -151,6 +152,63 @@ func TestResolveAgentSpecConflictingTools(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "allow/exclude") {
 		t.Fatalf("ResolveAgentSpec() error = %v, want allow/exclude", err)
+	}
+}
+
+func TestResolveAgentSpecRejectsExtendsPathTraversal(t *testing.T) {
+	t.Parallel()
+
+	sandbox := t.TempDir()
+	rootDir := filepath.Join(sandbox, "specs")
+	outsideDir := filepath.Join(sandbox, "outside")
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootDir) error = %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outsideDir) error = %v", err)
+	}
+
+	parentPath := filepath.Join(outsideDir, "base.yaml")
+	childPath := filepath.Join(rootDir, "child.yaml")
+	if err := osWriteFile(parentPath, "name: outside-base\n"); err != nil {
+		t.Fatalf("write parent error = %v", err)
+	}
+	if err := osWriteFile(childPath, "name: child\nextends: ../outside/base.yaml\n"); err != nil {
+		t.Fatalf("write child error = %v", err)
+	}
+
+	_, err := ResolveAgentSpec(childPath)
+	if err == nil {
+		t.Fatal("ResolveAgentSpec() error = nil, want traversal rejection")
+	}
+	if !strings.Contains(err.Error(), "escapes root spec directory") {
+		t.Fatalf("ResolveAgentSpec() error = %v, want contains escapes root spec directory", err)
+	}
+}
+
+func TestResolveAgentSpecRejectsAbsoluteExtendsPath(t *testing.T) {
+	t.Parallel()
+
+	rootDir := filepath.Join(t.TempDir(), "specs")
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(rootDir) error = %v", err)
+	}
+
+	parentPath := filepath.Join(rootDir, "base.yaml")
+	childPath := filepath.Join(rootDir, "child.yaml")
+	if err := osWriteFile(parentPath, "name: base\n"); err != nil {
+		t.Fatalf("write parent error = %v", err)
+	}
+	if err := osWriteFile(childPath, fmt.Sprintf("name: child\nextends: %q\n", parentPath)); err != nil {
+		t.Fatalf("write child error = %v", err)
+	}
+
+	_, err := ResolveAgentSpec(childPath)
+	if err == nil {
+		t.Fatal("ResolveAgentSpec() error = nil, want absolute path rejection")
+	}
+	if !strings.Contains(err.Error(), "must be relative") {
+		t.Fatalf("ResolveAgentSpec() error = %v, want contains must be relative", err)
 	}
 }
 

@@ -614,6 +614,30 @@ func TestReadMediaFileExecuteRejectsOversizedFile(t *testing.T) {
 	}
 }
 
+func TestReadMediaFileExecuteRejectsNonRegularFile(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	mediaDir := filepath.Join(workDir, "media-dir")
+	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(media-dir) error = %v", err)
+	}
+
+	tool := NewReadMediaFile(workDir, true, true)
+	result, execErr := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path": "media-dir",
+	}))
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if !strings.Contains(resultOutputText(t, result), "not a regular file") {
+		t.Fatalf("result output = %q, want contains not a regular file", resultOutputText(t, result))
+	}
+}
+
 func TestReadMediaFileExecuteRejectsUnexpectedField(t *testing.T) {
 	t.Parallel()
 

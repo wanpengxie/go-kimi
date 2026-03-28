@@ -94,6 +94,9 @@ func (t *ReadMediaFile) Execute(_ context.Context, params json.RawMessage) (type
 	if err != nil {
 		return buildErrorResult(readMediaToolName, fmt.Sprintf("stat file %q: %v", pathLabel, err)), nil
 	}
+	if !info.Mode().IsRegular() {
+		return buildErrorResult(readMediaToolName, fmt.Sprintf("file %q is not a regular file", pathLabel)), nil
+	}
 	if info.Size() > limit {
 		return buildErrorResult(
 			readMediaToolName,

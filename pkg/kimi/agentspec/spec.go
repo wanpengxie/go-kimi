@@ -81,7 +81,8 @@ func ResolveAgentSpec(path string) (*ResolvedSpec, error) {
 	stack := map[string]struct{}{}
 	cache := map[string]*AgentSpec{}
 	chain := make([]string, 0, 4)
-	specs, err := resolveSpecChain(resolvedPath, stack, cache, &chain)
+	rootDir := filepath.Dir(resolvedPath)
+	specs, err := resolveSpecChain(resolvedPath, rootDir, stack, cache, &chain)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +118,7 @@ func LoadResolvedSpec(path string) (*ResolvedSpec, error) {
 
 func resolveSpecChain(
 	path string,
+	rootDir string,
 	stack map[string]struct{},
 	cache map[string]*AgentSpec,
 	chain *[]string,
@@ -146,9 +148,19 @@ func resolveSpecChain(
 	if parentPath == "" {
 		return []*AgentSpec{spec}, nil
 	}
+	if filepath.IsAbs(parentPath) {
+		return nil, fmt.Errorf("agentspec: extends path %q must be relative", parentPath)
+	}
 
 	resolvedParentPath := resolveExtendsPath(path, parentPath)
-	parentChain, err := resolveSpecChain(resolvedParentPath, stack, cache, chain)
+	if !pathWithinDir(resolvedParentPath, rootDir) {
+		return nil, fmt.Errorf(
+			"agentspec: extends path %q escapes root spec directory %q",
+			parentPath,
+			rootDir,
+		)
+	}
+	parentChain, err := resolveSpecChain(resolvedParentPath, rootDir, stack, cache, chain)
 	if err != nil {
 		return nil, err
 	}
@@ -309,4 +321,13 @@ func normalizeSpecPath(path string) (string, error) {
 		return "", fmt.Errorf("agentspec: resolve path %q: %w", path, err)
 	}
 	return filepath.Clean(absPath), nil
+}
+
+func pathWithinDir(path, dir string) bool {
+	path = filepath.Clean(path)
+	dir = filepath.Clean(dir)
+	if path == dir {
+		return true
+	}
+	return strings.HasPrefix(path, dir+string(os.PathSeparator))
 }

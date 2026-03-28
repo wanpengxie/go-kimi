@@ -455,28 +455,28 @@ func resolveProvider(cfg config.Config, spec *agentspec.ResolvedSpec, agentCfg A
 		modelName = strings.TrimSpace(cfg.DefaultModel)
 	}
 
-	providerName := strings.TrimSpace(cfg.DefaultProvider)
-	if modelName != "" {
-		model, ok := findModel(cfg.Models, modelName)
-		if !ok {
-			return nil, "", stdErrors.Join(
-				kimierrors.ErrModelNotFound,
-				fmt.Errorf("kimi: model %q not found", modelName),
-			)
-		}
-		providerName = strings.TrimSpace(model.Provider)
-	}
-
-	providerModel, ok := findProvider(cfg.Providers, providerName)
-	if !ok {
-		return nil, "", stdErrors.Join(
-			kimierrors.ErrProviderNotFound,
-			fmt.Errorf("kimi: provider %q not found", providerName),
-		)
-	}
-
 	provider := agentCfg.Provider
 	if provider == nil {
+		providerName := strings.TrimSpace(cfg.DefaultProvider)
+		if modelName != "" {
+			model, ok := findModel(cfg.Models, modelName)
+			if !ok {
+				return nil, "", stdErrors.Join(
+					kimierrors.ErrModelNotFound,
+					fmt.Errorf("kimi: model %q not found", modelName),
+				)
+			}
+			providerName = strings.TrimSpace(model.Provider)
+		}
+
+		providerModel, ok := findProvider(cfg.Providers, providerName)
+		if !ok {
+			return nil, "", stdErrors.Join(
+				kimierrors.ErrProviderNotFound,
+				fmt.Errorf("kimi: provider %q not found", providerName),
+			)
+		}
+
 		constructed, err := llm.NewProvider(llm.ProviderConfig{
 			Type:    providerModel.Type,
 			BaseURL: providerModel.BaseURL,

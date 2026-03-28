@@ -144,6 +144,29 @@ func TestAgentRunReturnsMaxStepsReached(t *testing.T) {
 	}
 }
 
+func TestNewAgentCustomProviderBypassesModelRegistry(t *testing.T) {
+	t.Parallel()
+
+	agent, err := NewAgent(AgentConfig{
+		WorkDir:  t.TempDir(),
+		Config:   testRuntimeConfig(),
+		Provider: &loopingProvider{model: "base-model"},
+		Overrides: AgentOverrides{
+			Model: "custom-model-not-in-registry",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAgent() error = %v, want nil", err)
+	}
+	if closeErr := agent.Close(); closeErr != nil {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+
+	if got := agent.provider.ModelName(); got != "custom-model-not-in-registry" {
+		t.Fatalf("provider model = %q, want %q", got, "custom-model-not-in-registry")
+	}
+}
+
 func TestCompositeEmitter_PartialFailure(t *testing.T) {
 	t.Parallel()
 
