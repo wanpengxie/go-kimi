@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
@@ -121,6 +122,17 @@ func (s *Soul) RespondApproval(requestID string, decision ApprovalDecision, feed
 		return errors.New("soul: approval is unavailable")
 	}
 	return s.approval.Respond(requestID, decision, feedback)
+}
+
+// SetApprovalRuntime configures one optional centralized approval runtime for this soul.
+func (s *Soul) SetApprovalRuntime(runtime *approvalruntime.ApprovalRuntime, source approvalruntime.ApprovalSource) {
+	if s == nil {
+		return
+	}
+	if s.approval == nil {
+		s.approval = NewApprovalState(s.emitApprovalRequest)
+	}
+	s.approval.SetRuntime(runtime, source)
 }
 
 func (s *Soul) ensureReady() error {

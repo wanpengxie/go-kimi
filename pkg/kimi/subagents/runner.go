@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xiewanpeng/go-kimi/internal/soul"
+	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
@@ -30,12 +31,13 @@ type ForegroundRunRequest struct {
 
 // RunnerDeps defines required dependencies for ForegroundSubagentRunner.
 type RunnerDeps struct {
-	Market         *LaborMarket
-	Store          *SubagentStore
-	Provider       llm.ChatProvider
-	ParentRegistry soul.ToolRegistry
-	SystemPrompt   string
-	WorkDir        string
+	Market          *LaborMarket
+	Store           *SubagentStore
+	Provider        llm.ChatProvider
+	ApprovalRuntime *approvalruntime.ApprovalRuntime
+	ParentRegistry  soul.ToolRegistry
+	SystemPrompt    string
+	WorkDir         string
 }
 
 // ForegroundSubagentRunner executes one subagent run synchronously.
@@ -252,6 +254,18 @@ func (r *ForegroundSubagentRunner) executeSoulRun(
 	}, contextDir)
 	if err != nil {
 		return soul.StepResult{}, err
+	}
+	if r.deps.ApprovalRuntime != nil {
+		source := approvalruntime.ApprovalSource{
+			Kind:         approvalruntime.SourceForegroundTurn,
+			ID:           strings.TrimSpace(record.AgentID),
+			AgentID:      strings.TrimSpace(record.AgentID),
+			SubagentType: strings.TrimSpace(record.SubagentType),
+		}
+		if req.Background {
+			source.Kind = approvalruntime.SourceBackgroundAgent
+		}
+		engine.SetApprovalRuntime(r.deps.ApprovalRuntime, source)
 	}
 
 	result, err := engine.Run(ctx, types.ContentParts{
