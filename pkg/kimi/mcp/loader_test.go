@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
@@ -171,5 +173,30 @@ func TestMCPToolLoaderLoadAllRejectsDuplicateNames(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate server name") {
 		t.Fatalf("LoadAll() error = %q, want duplicate server name", err.Error())
+	}
+}
+
+func TestDefaultTransportFactorySupportsStreamableHTTP(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"ok":true}}`))
+	}))
+	defer server.Close()
+
+	transport, err := defaultTransportFactory(MCPServerConfig{
+		Name:      "stream",
+		Transport: TransportStreamableHTTP,
+		URL:       server.URL,
+	})
+	if err != nil {
+		t.Fatalf("defaultTransportFactory(streamable_http) error = %v", err)
+	}
+	if _, ok := transport.(*SSETransport); !ok {
+		t.Fatalf("transport type = %T, want *SSETransport", transport)
+	}
+	if err := transport.Close(); err != nil {
+		t.Fatalf("transport.Close() error = %v", err)
 	}
 }

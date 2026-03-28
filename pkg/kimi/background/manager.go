@@ -17,6 +17,8 @@ import (
 
 var backgroundTaskSequence uint64
 
+const waitPollInterval = 20 * time.Millisecond
+
 // SubagentRunner executes one foreground subagent run.
 type SubagentRunner interface {
 	Run(ctx context.Context, req subagents.ForegroundRunRequest) (types.ToolReturnValue, error)
@@ -175,6 +177,120 @@ func (m *BackgroundTaskManager) ReadOutput(taskID string, offset int64, maxBytes
 		return nil, err
 	}
 	return m.store.ReadOutput(taskID, offset, maxBytes)
+}
+
+// TailOutput reads one structured output chunk from offset with eof/status metadata.
+func (m *BackgroundTaskManager) TailOutput(taskID string, offset int64, maxBytes int) (TaskOutputChunk, error) {
+	if err := m.validateBaseDeps(); err != nil {
+		return TaskOutputChunk{}, err
+	}
+	normalizedTaskID, err := normalizeTaskID(taskID)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+	if offset < 0 {
+		return TaskOutputChunk{}, errors.New("background manager: offset must be >= 0")
+	}
+
+	view, err := m.store.View(normalizedTaskID)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+	output, err := m.store.ReadOutput(normalizedTaskID, offset, maxBytes)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+	totalSize, err := m.store.OutputSize(normalizedTaskID)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+
+	nextOffset := offset + int64(len(output))
+	if nextOffset > totalSize {
+		nextOffset = totalSize
+	}
+	eof := view.Runtime.Status.IsTerminal() && nextOffset >= totalSize
+
+	return TaskOutputChunk{
+		TaskID:     normalizedTaskID,
+		Status:     view.Runtime.Status,
+		Offset:     offset,
+		NextOffset: nextOffset,
+		Output:     string(output),
+		EOF:        eof,
+	}, nil
+}
+
+// ReadConsumerOutput tails output using one consumer-specific persisted cursor.
+func (m *BackgroundTaskManager) ReadConsumerOutput(taskID string, consumerID string, maxBytes int) (TaskOutputChunk, error) {
+	if err := m.validateBaseDeps(); err != nil {
+		return TaskOutputChunk{}, err
+	}
+	normalizedTaskID, err := normalizeTaskID(taskID)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+	normalizedConsumerID, err := normalizeConsumerID(consumerID)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+
+	state, err := m.store.ReadConsumerState(normalizedTaskID, normalizedConsumerID)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+	chunk, err := m.TailOutput(normalizedTaskID, state.Offset, maxBytes)
+	if err != nil {
+		return TaskOutputChunk{}, err
+	}
+	chunk.ConsumerID = normalizedConsumerID
+
+	state.Offset = chunk.NextOffset
+	if err := m.store.WriteConsumerState(normalizedTaskID, state); err != nil {
+		return TaskOutputChunk{}, err
+	}
+	return chunk, nil
+}
+
+// Wait blocks until one task reaches terminal state or context is done.
+func (m *BackgroundTaskManager) Wait(ctx context.Context, taskID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := m.validateBaseDeps(); err != nil {
+		return err
+	}
+	normalizedTaskID, err := normalizeTaskID(taskID)
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(waitPollInterval)
+	defer ticker.Stop()
+
+	for {
+		view, err := m.store.View(normalizedTaskID)
+		if err != nil {
+			return err
+		}
+		status := view.Runtime.Status
+		if status.IsTerminal() {
+			if status == TaskCompleted {
+				return nil
+			}
+			reason := strings.TrimSpace(view.Runtime.FailureReason)
+			if reason == "" {
+				reason = fmt.Sprintf("task %q finished with status %q", normalizedTaskID, status)
+			}
+			return errors.New(reason)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("background manager: wait task %q: %w", normalizedTaskID, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // KillTask marks one task as kill requested and cancels in-memory execution if running.

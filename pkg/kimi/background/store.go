@@ -16,6 +16,7 @@ const (
 	taskRuntimeFileName = "runtime.json"
 	taskControlFileName = "control.json"
 	taskOutputFileName  = "output.log"
+	taskConsumersDir    = "consumers"
 	MaxTaskOutputBytes  = 1 * 1024 * 1024
 )
 
@@ -315,6 +316,102 @@ func (s *BackgroundTaskStore) AppendOutput(taskID string, data []byte) error {
 	return nil
 }
 
+// OutputSize returns one task output log size in bytes.
+func (s *BackgroundTaskStore) OutputSize(taskID string) (int64, error) {
+	path, err := s.taskFilePath(taskID, taskOutputFileName)
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, fmt.Errorf("background store: task %q not found: %w", strings.TrimSpace(taskID), os.ErrNotExist)
+		}
+		return 0, fmt.Errorf("background store: stat %q: %w", path, err)
+	}
+	return info.Size(), nil
+}
+
+// ReadConsumerState loads one consumer cursor; missing state returns offset=0.
+func (s *BackgroundTaskStore) ReadConsumerState(taskID string, consumerID string) (*TaskConsumerState, error) {
+	normalizedTaskID, err := s.ensureTaskExists(taskID)
+	if err != nil {
+		return nil, err
+	}
+	normalizedConsumerID, err := normalizeConsumerID(consumerID)
+	if err != nil {
+		return nil, err
+	}
+	path, err := s.consumerStatePath(normalizedTaskID, normalizedConsumerID)
+	if err != nil {
+		return nil, err
+	}
+
+	var state TaskConsumerState
+	if err := readJSON(path, &state); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &TaskConsumerState{
+				TaskID:     normalizedTaskID,
+				ConsumerID: normalizedConsumerID,
+				Offset:     0,
+			}, nil
+		}
+		return nil, err
+	}
+	if strings.TrimSpace(state.TaskID) == "" {
+		state.TaskID = normalizedTaskID
+	}
+	if strings.TrimSpace(state.TaskID) != normalizedTaskID {
+		return nil, fmt.Errorf("background store: consumer state task_id mismatch %q != %q", strings.TrimSpace(state.TaskID), normalizedTaskID)
+	}
+	if strings.TrimSpace(state.ConsumerID) == "" {
+		state.ConsumerID = normalizedConsumerID
+	}
+	if strings.TrimSpace(state.ConsumerID) != normalizedConsumerID {
+		return nil, fmt.Errorf("background store: consumer state consumer_id mismatch %q != %q", strings.TrimSpace(state.ConsumerID), normalizedConsumerID)
+	}
+	if state.Offset < 0 {
+		return nil, errors.New("background store: consumer state offset must be >= 0")
+	}
+	return &TaskConsumerState{
+		TaskID:     normalizedTaskID,
+		ConsumerID: normalizedConsumerID,
+		Offset:     state.Offset,
+	}, nil
+}
+
+// WriteConsumerState persists one consumer cursor snapshot.
+func (s *BackgroundTaskStore) WriteConsumerState(taskID string, state *TaskConsumerState) error {
+	if state == nil {
+		return errors.New("background store: consumer state is nil")
+	}
+	normalizedTaskID, err := s.ensureTaskExists(taskID)
+	if err != nil {
+		return err
+	}
+	normalizedConsumerID, err := normalizeConsumerID(state.ConsumerID)
+	if err != nil {
+		return err
+	}
+	if state.Offset < 0 {
+		return errors.New("background store: consumer state offset must be >= 0")
+	}
+
+	path, err := s.consumerStatePath(normalizedTaskID, normalizedConsumerID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("background store: mkdir %q: %w", filepath.Dir(path), err)
+	}
+	normalized := TaskConsumerState{
+		TaskID:     normalizedTaskID,
+		ConsumerID: normalizedConsumerID,
+		Offset:     state.Offset,
+	}
+	return writeJSONAtomic(path, &normalized)
+}
+
 func (s *BackgroundTaskStore) storeDir() (string, error) {
 	if s == nil {
 		return "", errors.New("background store: nil store")
@@ -410,6 +507,36 @@ func normalizeTaskID(taskID string) (string, error) {
 		return "", fmt.Errorf("background store: invalid task id %q", normalized)
 	}
 	return normalized, nil
+}
+
+func normalizeConsumerID(consumerID string) (string, error) {
+	normalized := strings.TrimSpace(consumerID)
+	if normalized == "" {
+		return "", errors.New("background store: consumer id is required")
+	}
+	if normalized == "." || normalized == ".." {
+		return "", fmt.Errorf("background store: invalid consumer id %q", normalized)
+	}
+	if strings.Contains(normalized, "/") || strings.Contains(normalized, "\\") {
+		return "", fmt.Errorf("background store: invalid consumer id %q", normalized)
+	}
+	return normalized, nil
+}
+
+func (s *BackgroundTaskStore) consumerStatePath(taskID string, consumerID string) (string, error) {
+	baseDir, err := s.storeDir()
+	if err != nil {
+		return "", err
+	}
+	normalizedTaskID, err := normalizeTaskID(taskID)
+	if err != nil {
+		return "", err
+	}
+	normalizedConsumerID, err := normalizeConsumerID(consumerID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(baseDir, normalizedTaskID, taskConsumersDir, normalizedConsumerID+".json"), nil
 }
 
 func normalizeRuntime(rt TaskRuntime) TaskRuntime {

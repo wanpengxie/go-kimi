@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMCPToolNameAndMetadata(t *testing.T) {
@@ -169,4 +170,43 @@ func TestMCPToolExecuteErrors(t *testing.T) {
 			t.Fatalf("Execute(call error) error type = %T, want wrapped *RPCError", err)
 		}
 	})
+}
+
+func TestMCPToolExecuteHonorsPerToolTimeout(t *testing.T) {
+	t.Parallel()
+
+	transport := &blockingCallTransport{}
+	client := NewMCPClient(transport)
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	tool := NewMCPToolWithTimeout(client, MCPToolDefinition{Name: "echo"}, "fs", 50*time.Millisecond)
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("Execute(timeout) error = nil, want timeout")
+	}
+	if !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("Execute(timeout) error = %q, want deadline exceeded", err.Error())
+	}
+}
+
+type blockingCallTransport struct{}
+
+func (t *blockingCallTransport) Send(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	switch strings.TrimSpace(method) {
+	case "initialize":
+		return json.RawMessage(`{"protocolVersion":"2026-03-26","serverInfo":{"name":"fs"}}`), nil
+	case "notifications/initialized":
+		return json.RawMessage(`{}`), nil
+	case "tools/call":
+		<-ctx.Done()
+		return nil, ctx.Err()
+	default:
+		return nil, errors.New("unexpected method")
+	}
+}
+
+func (t *blockingCallTransport) Close() error {
+	return nil
 }

@@ -74,3 +74,21 @@ type TaskView struct {
 	Runtime TaskRuntime `json:"runtime"`
 	Control TaskControl `json:"control"`
 }
+
+// TaskConsumerState tracks one consumer-specific output cursor.
+type TaskConsumerState struct {
+	TaskID     string `json:"task_id"`
+	ConsumerID string `json:"consumer_id"`
+	Offset     int64  `json:"offset"`
+}
+
+// TaskOutputChunk is one structured output slice with status/eof metadata.
+type TaskOutputChunk struct {
+	TaskID     string     `json:"task_id"`
+	ConsumerID string     `json:"consumer_id,omitempty"`
+	Status     TaskStatus `json:"status"`
+	Offset     int64      `json:"offset"`
+	NextOffset int64      `json:"next_offset"`
+	Output     string     `json:"output"`
+	EOF        bool       `json:"eof"`
+}

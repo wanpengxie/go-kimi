@@ -25,6 +25,7 @@ type ApprovalRuntime struct {
 	mu sync.RWMutex
 
 	pending     map[string]*pendingRequest
+	resolved    map[string]*RequestRecord
 	subscribers map[<-chan Event]chan Event
 }
 
@@ -37,6 +38,7 @@ type pendingRequest struct {
 func NewApprovalRuntime() *ApprovalRuntime {
 	return &ApprovalRuntime{
 		pending:     make(map[string]*pendingRequest),
+		resolved:    make(map[string]*RequestRecord),
 		subscribers: make(map[<-chan Event]chan Event),
 	}
 }
@@ -47,6 +49,17 @@ func (r *ApprovalRuntime) CreateRequest(
 	source ApprovalSource,
 	action string,
 	description string,
+) (RequestRecord, <-chan ApprovalDecision, error) {
+	return r.CreateRequestWithToolCall(ctx, source, action, description, "")
+}
+
+// CreateRequestWithToolCall creates one pending approval request and associates one tool_call_id.
+func (r *ApprovalRuntime) CreateRequestWithToolCall(
+	ctx context.Context,
+	source ApprovalSource,
+	action string,
+	description string,
+	toolCallID string,
 ) (RequestRecord, <-chan ApprovalDecision, error) {
 	if r == nil {
 		return RequestRecord{}, nil, ErrNilRuntime
@@ -71,6 +84,7 @@ func (r *ApprovalRuntime) CreateRequest(
 		Source:      normalizedSource,
 		Action:      strings.TrimSpace(action),
 		Description: strings.TrimSpace(description),
+		ToolCallID:  strings.TrimSpace(toolCallID),
 		CreatedAt:   time.Now().UTC(),
 	}
 
@@ -109,6 +123,7 @@ func (r *ApprovalRuntime) Resolve(requestID string, decision ApprovalDecision, f
 	feedback = strings.TrimSpace(feedback)
 
 	r.mu.Lock()
+	r.ensureInitializedLocked()
 	pending, ok := r.pending[normalizedRequestID]
 	if !ok {
 		r.mu.Unlock()
@@ -122,6 +137,7 @@ func (r *ApprovalRuntime) Resolve(requestID string, decision ApprovalDecision, f
 	recordedDecision := decision
 	record.Decision = &recordedDecision
 	record.Feedback = feedback
+	r.resolved[record.ID] = cloneRequestRecord(&record)
 	r.mu.Unlock()
 
 	select {
@@ -150,6 +166,7 @@ func (r *ApprovalRuntime) CancelBySource(kind SourceKind, sourceID string) int {
 	}
 
 	r.mu.Lock()
+	r.ensureInitializedLocked()
 	if len(r.pending) == 0 {
 		r.mu.Unlock()
 		return 0
@@ -177,6 +194,10 @@ func (r *ApprovalRuntime) CancelBySource(kind SourceKind, sourceID string) int {
 		decision := ApprovalReject
 		record.Decision = &decision
 		record.Feedback = feedback
+		r.mu.Lock()
+		r.ensureInitializedLocked()
+		r.resolved[record.ID] = cloneRequestRecord(&record)
+		r.mu.Unlock()
 
 		select {
 		case matched[i].decisionCh <- ApprovalReject:
@@ -227,6 +248,32 @@ func (r *ApprovalRuntime) ListPending() []*RequestRecord {
 	return records
 }
 
+// GetRequest returns one request record by id from pending or resolved snapshots.
+func (r *ApprovalRuntime) GetRequest(requestID string) (*RequestRecord, error) {
+	if r == nil {
+		return nil, ErrNilRuntime
+	}
+
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return nil, errors.New("approval runtime: empty request id")
+	}
+
+	r.mu.RLock()
+	if pending, ok := r.pending[normalizedRequestID]; ok && pending != nil {
+		record := cloneRequestRecord(&pending.record)
+		r.mu.RUnlock()
+		return record, nil
+	}
+	if resolved, ok := r.resolved[normalizedRequestID]; ok {
+		record := cloneRequestRecord(resolved)
+		r.mu.RUnlock()
+		return record, nil
+	}
+	r.mu.RUnlock()
+	return nil, fmt.Errorf("%w: %s", ErrRequestNotFound, normalizedRequestID)
+}
+
 // Subscribe subscribes runtime events.
 func (r *ApprovalRuntime) Subscribe() <-chan Event {
 	if r == nil {
@@ -266,6 +313,9 @@ func (r *ApprovalRuntime) Unsubscribe(ch <-chan Event) {
 func (r *ApprovalRuntime) ensureInitializedLocked() {
 	if r.pending == nil {
 		r.pending = make(map[string]*pendingRequest)
+	}
+	if r.resolved == nil {
+		r.resolved = make(map[string]*RequestRecord)
 	}
 	if r.subscribers == nil {
 		r.subscribers = make(map[<-chan Event]chan Event)

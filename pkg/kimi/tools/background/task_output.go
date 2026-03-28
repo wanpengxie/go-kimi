@@ -21,15 +21,19 @@ const (
 
 var taskOutputSchema = json.RawMessage(`{
   "type": "object",
-  "properties": {
-    "task_id": {
-      "type": "string",
-      "description": "Task id to inspect"
-    },
-    "offset": {
-      "type": "integer",
-      "minimum": 0,
-      "default": 0,
+	"properties": {
+	    "task_id": {
+	      "type": "string",
+	      "description": "Task id to inspect"
+	    },
+	    "consumer_id": {
+	      "type": "string",
+	      "description": "Optional consumer cursor id; when set, output is read from consumer state"
+	    },
+	    "offset": {
+	      "type": "integer",
+	      "minimum": 0,
+	      "default": 0,
       "description": "Byte offset in output log"
     },
     "max_bytes": {
@@ -51,9 +55,10 @@ type TaskOutputTool struct {
 }
 
 type taskOutputParams struct {
-	TaskID   string `json:"task_id"`
-	Offset   int64  `json:"offset"`
-	MaxBytes int    `json:"max_bytes"`
+	TaskID     string `json:"task_id"`
+	ConsumerID string `json:"consumer_id"`
+	Offset     int64  `json:"offset"`
+	MaxBytes   int    `json:"max_bytes"`
 }
 
 // NewTaskOutput creates one task_output tool.
@@ -98,16 +103,37 @@ func (t *TaskOutputTool) Execute(_ context.Context, params json.RawMessage) (typ
 	if maxBytes == 0 {
 		maxBytes = t.defaultMaxLen()
 	}
-	output, err := t.Manager.ReadOutput(input.TaskID, input.Offset, maxBytes)
+	var chunk corebg.TaskOutputChunk
+	if input.ConsumerID != "" {
+		chunk, err = t.Manager.ReadConsumerOutput(input.TaskID, input.ConsumerID, maxBytes)
+	} else {
+		chunk, err = t.Manager.TailOutput(input.TaskID, input.Offset, maxBytes)
+	}
 	if err != nil {
 		return buildErrorResult(taskOutputToolName, fmt.Sprintf("task_output: read output: %v", err)), nil
 	}
+	output := limitOutput(chunk.Output)
+	chunkPayload := map[string]any{
+		"task_id":     chunk.TaskID,
+		"status":      string(chunk.Status),
+		"offset":      chunk.Offset,
+		"next_offset": chunk.NextOffset,
+		"output":      output,
+		"eof":         chunk.EOF,
+	}
+	if chunk.ConsumerID != "" {
+		chunkPayload["consumer_id"] = chunk.ConsumerID
+	}
 
 	return buildResult(taskOutputToolName, map[string]any{
-		"task":      summarizeTask(view),
-		"output":    limitOutput(string(output)),
-		"offset":    input.Offset,
-		"max_bytes": maxBytes,
+		"task":        summarizeTask(view),
+		"chunk":       chunkPayload,
+		"output":      output,
+		"offset":      chunk.Offset,
+		"next_offset": chunk.NextOffset,
+		"status":      string(chunk.Status),
+		"eof":         chunk.EOF,
+		"max_bytes":   maxBytes,
 	}, false), nil
 }
 
@@ -125,6 +151,7 @@ func decodeTaskOutputParams(raw json.RawMessage) (taskOutputParams, error) {
 	if input.TaskID == "" {
 		return taskOutputParams{}, errors.New("task_output: task_id is required")
 	}
+	input.ConsumerID = strings.TrimSpace(input.ConsumerID)
 	if input.Offset < 0 {
 		return taskOutputParams{}, errors.New("task_output: offset must be >= 0")
 	}

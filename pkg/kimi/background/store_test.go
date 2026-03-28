@@ -99,6 +99,33 @@ func TestBackgroundTaskStoreCreateReadWriteListAndOutput(t *testing.T) {
 		t.Fatalf("ReadOutput(task-1, 1, 4) = %q, want %q", string(window), "ello")
 	}
 
+	size, err := store.OutputSize("task-1")
+	if err != nil {
+		t.Fatalf("OutputSize(task-1) error = %v", err)
+	}
+	if size != int64(len("hello\nworld")) {
+		t.Fatalf("OutputSize(task-1) = %d, want %d", size, len("hello\nworld"))
+	}
+
+	consumerState, err := store.ReadConsumerState("task-1", "ui-main")
+	if err != nil {
+		t.Fatalf("ReadConsumerState(task-1, ui-main) error = %v", err)
+	}
+	if consumerState.Offset != 0 {
+		t.Fatalf("ReadConsumerState initial offset = %d, want 0", consumerState.Offset)
+	}
+	consumerState.Offset = 4
+	if err := store.WriteConsumerState("task-1", consumerState); err != nil {
+		t.Fatalf("WriteConsumerState(task-1, ui-main) error = %v", err)
+	}
+	consumerStateReloaded, err := store.ReadConsumerState("task-1", "ui-main")
+	if err != nil {
+		t.Fatalf("ReadConsumerState(task-1, ui-main) after write error = %v", err)
+	}
+	if consumerStateReloaded.Offset != 4 {
+		t.Fatalf("ReadConsumerState reloaded offset = %d, want 4", consumerStateReloaded.Offset)
+	}
+
 	view, err := store.View("task-1")
 	if err != nil {
 		t.Fatalf("View(task-1) error = %v", err)
@@ -183,6 +210,15 @@ func TestBackgroundTaskStoreValidationAndMissingErrors(t *testing.T) {
 	}
 	if _, err := store.ReadOutput("missing", 0, -1); err == nil {
 		t.Fatal("ReadOutput(negative maxBytes) error = nil, want error")
+	}
+	if _, err := store.OutputSize("missing"); err == nil {
+		t.Fatal("OutputSize(missing) error = nil, want error")
+	}
+	if _, err := store.ReadConsumerState("missing", "ui"); err == nil {
+		t.Fatal("ReadConsumerState(missing) error = nil, want error")
+	}
+	if err := store.WriteConsumerState("missing", nil); err == nil {
+		t.Fatal("WriteConsumerState(missing, nil) error = nil, want error")
 	}
 	if err := store.WriteRuntime("missing", nil); err == nil {
 		t.Fatal("WriteRuntime(nil) error = nil, want error")

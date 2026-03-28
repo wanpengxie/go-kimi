@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 )
@@ -82,7 +83,8 @@ func (l *MCPToolLoader) LoadAll(ctx context.Context) ([]tools.Tool, error) {
 		}
 
 		for j := range definitions {
-			discovered = append(discovered, NewMCPTool(client, definitions[j], cfg.Name))
+			timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
+			discovered = append(discovered, NewMCPToolWithTimeout(client, definitions[j], cfg.Name, timeout))
 		}
 		clients = append(clients, client)
 	}
@@ -140,6 +142,8 @@ func defaultTransportFactory(cfg MCPServerConfig) (Transport, error) {
 	case TransportStdio:
 		return NewStdioTransport(cfg.Command, cfg.Args, cfg.Env)
 	case TransportSSE:
+		return NewSSETransport(cfg.URL, cfg.Headers)
+	case TransportStreamableHTTP:
 		return NewSSETransport(cfg.URL, cfg.Headers)
 	default:
 		return nil, fmt.Errorf("unsupported transport %q", cfg.Transport)

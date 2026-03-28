@@ -642,11 +642,12 @@ func loadMCPTools(cfg config.Config) ([]tools.Tool, *mcp.MCPToolLoader, error) {
 			continue
 		}
 		serverConfigs = append(serverConfigs, mcp.MCPServerConfig{
-			Name:      strings.TrimSpace(client.Name),
-			Transport: mcp.TransportStdio,
-			Command:   strings.TrimSpace(client.Command),
-			Args:      append([]string(nil), client.Args...),
-			Env:       cloneStringMap(client.Env),
+			Name:           strings.TrimSpace(client.Name),
+			Transport:      mcp.TransportStdio,
+			TimeoutSeconds: client.TimeoutSeconds,
+			Command:        strings.TrimSpace(client.Command),
+			Args:           append([]string(nil), client.Args...),
+			Env:            cloneStringMap(client.Env),
 		})
 	}
 	if len(serverConfigs) == 0 {

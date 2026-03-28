@@ -38,6 +38,7 @@ type RequestRecord struct {
 	Source      ApprovalSource    `json:"source"`
 	Action      string            `json:"action"`
 	Description string            `json:"description"`
+	ToolCallID  string            `json:"tool_call_id,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
 	ResolvedAt  *time.Time        `json:"resolved_at,omitempty"`
 	Decision    *ApprovalDecision `json:"decision,omitempty"`

@@ -13,12 +13,16 @@ const (
 	TransportStdio TransportType = "stdio"
 	// TransportSSE uses HTTP+SSE transport.
 	TransportSSE TransportType = "sse"
+	// TransportStreamableHTTP uses MCP streamable HTTP transport.
+	TransportStreamableHTTP TransportType = "streamable_http"
 )
 
 // MCPServerConfig describes one MCP server connection config.
 type MCPServerConfig struct {
 	Name      string        `json:"name"`
 	Transport TransportType `json:"transport"`
+	// TimeoutSeconds controls per-tool call timeout for tools exposed by this server.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 
 	// Stdio settings.
 	Command string            `json:"command,omitempty"`
@@ -32,13 +36,14 @@ type MCPServerConfig struct {
 
 func normalizeServerConfig(cfg MCPServerConfig) (MCPServerConfig, error) {
 	out := MCPServerConfig{
-		Name:      strings.TrimSpace(cfg.Name),
-		Transport: normalizeTransportType(cfg.Transport),
-		Command:   strings.TrimSpace(cfg.Command),
-		Args:      cloneStrings(cfg.Args),
-		Env:       cloneStringMap(cfg.Env),
-		URL:       strings.TrimSpace(cfg.URL),
-		Headers:   cloneStringMap(cfg.Headers),
+		Name:           strings.TrimSpace(cfg.Name),
+		Transport:      normalizeTransportType(cfg.Transport),
+		TimeoutSeconds: cfg.TimeoutSeconds,
+		Command:        strings.TrimSpace(cfg.Command),
+		Args:           cloneStrings(cfg.Args),
+		Env:            cloneStringMap(cfg.Env),
+		URL:            strings.TrimSpace(cfg.URL),
+		Headers:        cloneStringMap(cfg.Headers),
 	}
 
 	if out.Name == "" {
@@ -50,12 +55,15 @@ func normalizeServerConfig(cfg MCPServerConfig) (MCPServerConfig, error) {
 		if out.Command == "" {
 			return MCPServerConfig{}, fmt.Errorf("mcp config %q: command is required for stdio transport", out.Name)
 		}
-	case TransportSSE:
+	case TransportSSE, TransportStreamableHTTP:
 		if out.URL == "" {
 			return MCPServerConfig{}, fmt.Errorf("mcp config %q: url is required for sse transport", out.Name)
 		}
 	default:
 		return MCPServerConfig{}, fmt.Errorf("mcp config %q: unsupported transport %q", out.Name, out.Transport)
+	}
+	if out.TimeoutSeconds < 0 {
+		return MCPServerConfig{}, fmt.Errorf("mcp config %q: timeout_seconds must be >= 0", out.Name)
 	}
 
 	for key := range out.Env {
@@ -73,5 +81,11 @@ func normalizeServerConfig(cfg MCPServerConfig) (MCPServerConfig, error) {
 }
 
 func normalizeTransportType(t TransportType) TransportType {
-	return TransportType(strings.ToLower(strings.TrimSpace(string(t))))
+	normalized := strings.ToLower(strings.TrimSpace(string(t)))
+	switch normalized {
+	case "streamable-http":
+		return TransportStreamableHTTP
+	default:
+		return TransportType(normalized)
+	}
 }

@@ -153,10 +153,11 @@ func (s *Soul) requestToolApproval(ctx context.Context, call types.ToolCall) (bo
 		return true, ""
 	}
 
-	return s.approval.Request(
+	return s.approval.RequestWithToolCallID(
 		ctx,
 		call.Name,
 		toolApprovalDescription(call),
+		call.ID,
 	)
 }
 

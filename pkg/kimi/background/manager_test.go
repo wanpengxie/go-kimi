@@ -57,6 +57,90 @@ func TestBackgroundTaskManagerCreateBashTaskCompleted(t *testing.T) {
 	}
 }
 
+func TestBackgroundTaskManagerWait(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := newManagerForTest(t, nil)
+	taskID, err := manager.CreateBashTask(context.Background(), TaskSpec{
+		Command:    `printf "done"`,
+		TimeoutSec: 3,
+	})
+	if err != nil {
+		t.Fatalf("CreateBashTask(wait) error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := manager.Wait(ctx, taskID); err != nil {
+		t.Fatalf("Wait(completed) error = %v, want nil", err)
+	}
+
+	timeoutTaskID, err := manager.CreateBashTask(context.Background(), TaskSpec{
+		Command:    "sleep 2",
+		TimeoutSec: 1,
+	})
+	if err != nil {
+		t.Fatalf("CreateBashTask(wait timeout) error = %v", err)
+	}
+	if err := manager.Wait(ctx, timeoutTaskID); err == nil {
+		t.Fatal("Wait(failed task) error = nil, want error")
+	}
+}
+
+func TestBackgroundTaskManagerTailOutputAndConsumerState(t *testing.T) {
+	t.Parallel()
+
+	manager, _ := newManagerForTest(t, nil)
+	taskID, err := manager.CreateBashTask(context.Background(), TaskSpec{
+		Command:    `printf "abcdef"`,
+		TimeoutSec: 3,
+	})
+	if err != nil {
+		t.Fatalf("CreateBashTask(tail) error = %v", err)
+	}
+	waitForTerminalTask(t, manager, taskID, 5*time.Second)
+
+	chunk1, err := manager.TailOutput(taskID, 0, 3)
+	if err != nil {
+		t.Fatalf("TailOutput(chunk1) error = %v", err)
+	}
+	if chunk1.Output != "abc" || chunk1.NextOffset != 3 || chunk1.EOF {
+		t.Fatalf("chunk1 = %#v, want output=abc next_offset=3 eof=false", chunk1)
+	}
+
+	chunk2, err := manager.TailOutput(taskID, chunk1.NextOffset, 3)
+	if err != nil {
+		t.Fatalf("TailOutput(chunk2) error = %v", err)
+	}
+	if chunk2.Output != "def" || chunk2.NextOffset != 6 || !chunk2.EOF {
+		t.Fatalf("chunk2 = %#v, want output=def next_offset=6 eof=true", chunk2)
+	}
+
+	consumerA1, err := manager.ReadConsumerOutput(taskID, "consumer-a", 2)
+	if err != nil {
+		t.Fatalf("ReadConsumerOutput(consumer-a #1) error = %v", err)
+	}
+	if consumerA1.Output != "ab" || consumerA1.NextOffset != 2 {
+		t.Fatalf("consumerA1 = %#v, want output=ab next_offset=2", consumerA1)
+	}
+
+	consumerA2, err := manager.ReadConsumerOutput(taskID, "consumer-a", 2)
+	if err != nil {
+		t.Fatalf("ReadConsumerOutput(consumer-a #2) error = %v", err)
+	}
+	if consumerA2.Output != "cd" || consumerA2.Offset != 2 || consumerA2.NextOffset != 4 {
+		t.Fatalf("consumerA2 = %#v, want output=cd offset=2 next_offset=4", consumerA2)
+	}
+
+	consumerB1, err := manager.ReadConsumerOutput(taskID, "consumer-b", 2)
+	if err != nil {
+		t.Fatalf("ReadConsumerOutput(consumer-b #1) error = %v", err)
+	}
+	if consumerB1.Output != "ab" || consumerB1.Offset != 0 {
+		t.Fatalf("consumerB1 = %#v, want independent offset from start", consumerB1)
+	}
+}
+
 func TestBackgroundTaskManagerCreateBashTaskTimeout(t *testing.T) {
 	t.Parallel()
 

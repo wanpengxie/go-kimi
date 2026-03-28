@@ -95,6 +95,16 @@ func TestNormalizeServerConfigErrors(t *testing.T) {
 			},
 			wantSubstr: "headers contains empty key",
 		},
+		{
+			name: "negative timeout",
+			config: MCPServerConfig{
+				Name:           "a",
+				Transport:      TransportStdio,
+				Command:        "cmd",
+				TimeoutSeconds: -1,
+			},
+			wantSubstr: "timeout_seconds must be >= 0",
+		},
 	}
 
 	for _, tc := range tests {
@@ -132,6 +142,12 @@ func TestNormalizeTransportType(t *testing.T) {
 
 	if got := normalizeTransportType(TransportType(" SSE ")); got != TransportSSE {
 		t.Fatalf("normalizeTransportType() = %q, want %q", got, TransportSSE)
+	}
+	if got := normalizeTransportType(TransportType(" streamable-http ")); got != TransportStreamableHTTP {
+		t.Fatalf("normalizeTransportType(streamable-http) = %q, want %q", got, TransportStreamableHTTP)
+	}
+	if got := normalizeTransportType(TransportType(" STREAMABLE_HTTP ")); got != TransportStreamableHTTP {
+		t.Fatalf("normalizeTransportType(streamable_http) = %q, want %q", got, TransportStreamableHTTP)
 	}
 	if got := normalizeTransportType(TransportType("")); got != TransportType("") {
 		t.Fatalf("normalizeTransportType(empty) = %q, want empty", got)

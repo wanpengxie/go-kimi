@@ -72,7 +72,8 @@ type initializeResult struct {
 }
 
 type listToolsResult struct {
-	Tools []MCPToolDefinition `json:"tools"`
+	Tools      []MCPToolDefinition `json:"tools"`
+	NextCursor string              `json:"nextCursor,omitempty"`
 }
 
 type callToolParams struct {
@@ -160,27 +161,50 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]MCPToolDefinition, error) 
 		return nil, err
 	}
 
-	resultRaw, err := c.transport.Send(ctx, "tools/list", map[string]any{})
-	if err != nil {
-		return nil, fmt.Errorf("mcp client: tools/list: %w", err)
-	}
-
-	var result listToolsResult
-	if err := decodeMethodResult(resultRaw, &result, "tools/list"); err != nil {
-		return nil, err
-	}
-
-	tools := make([]MCPToolDefinition, 0, len(result.Tools))
-	for i := range result.Tools {
-		def := result.Tools[i]
-		def.Name = strings.TrimSpace(def.Name)
-		if def.Name == "" {
-			return nil, fmt.Errorf("mcp client: tools/list returned tool with empty name at index %d", i)
+	tools := make([]MCPToolDefinition, 0)
+	cursor := ""
+	seenCursors := map[string]struct{}{}
+	for {
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
 		}
-		def.Description = strings.TrimSpace(def.Description)
-		def.InputSchema = cloneRawMessage(def.InputSchema)
-		tools = append(tools, def)
+
+		resultRaw, err := c.transport.Send(ctx, "tools/list", params)
+		if err != nil {
+			return nil, fmt.Errorf("mcp client: tools/list: %w", err)
+		}
+
+		var result listToolsResult
+		if err := decodeMethodResult(resultRaw, &result, "tools/list"); err != nil {
+			return nil, err
+		}
+
+		for i := range result.Tools {
+			def := result.Tools[i]
+			def.Name = strings.TrimSpace(def.Name)
+			if def.Name == "" {
+				return nil, fmt.Errorf("mcp client: tools/list returned tool with empty name at index %d", i)
+			}
+			def.Description = strings.TrimSpace(def.Description)
+			def.InputSchema = cloneRawMessage(def.InputSchema)
+			tools = append(tools, def)
+		}
+
+		nextCursor := strings.TrimSpace(result.NextCursor)
+		if nextCursor == "" {
+			break
+		}
+		if nextCursor == cursor {
+			return nil, errors.New("mcp client: tools/list cursor did not advance")
+		}
+		if _, exists := seenCursors[nextCursor]; exists {
+			return nil, errors.New("mcp client: tools/list cursor loop detected")
+		}
+		seenCursors[nextCursor] = struct{}{}
+		cursor = nextCursor
 	}
+
 	return tools, nil
 }
 

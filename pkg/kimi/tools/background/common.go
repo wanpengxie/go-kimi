@@ -20,6 +20,8 @@ type TaskManager interface {
 	GetTask(taskID string) (*corebg.TaskView, error)
 	ListTasks(limit int) ([]*corebg.TaskView, error)
 	ReadOutput(taskID string, offset int64, maxBytes int) ([]byte, error)
+	TailOutput(taskID string, offset int64, maxBytes int) (corebg.TaskOutputChunk, error)
+	ReadConsumerOutput(taskID string, consumerID string, maxBytes int) (corebg.TaskOutputChunk, error)
 	KillTask(taskID string, reason string) error
 }
 

@@ -369,6 +369,50 @@ func TestMCPClientListToolsSuccess(t *testing.T) {
 	}
 }
 
+func TestMCPClientListToolsPagination(t *testing.T) {
+	t.Parallel()
+
+	base := newMockTransport(map[string][]mockSendResponse{
+		"initialize": {
+			{result: json.RawMessage(`{"protocolVersion":"2026-03-26","capabilities":{},"serverInfo":{"name":"fs"}}`)},
+		},
+		"tools/list": {
+			{result: json.RawMessage(`{"tools":[{"name":"echo","description":"echo","inputSchema":{"type":"object"}}],"nextCursor":"c1"}`)},
+			{result: json.RawMessage(`{"tools":[{"name":"search","description":"search","inputSchema":{"type":"object"}}]}`)},
+		},
+	})
+	transport := newMockTransportWithNotify(base, nil)
+	client := NewMCPClient(transport)
+
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	tools, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	if got, want := len(tools), 2; got != want {
+		t.Fatalf("len(tools) = %d, want %d", got, want)
+	}
+	if tools[0].Name != "echo" || tools[1].Name != "search" {
+		t.Fatalf("tool names = [%q %q], want [echo search]", tools[0].Name, tools[1].Name)
+	}
+
+	if got, want := base.methods(), []string{"initialize", "tools/list", "tools/list"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("send methods = %#v, want %#v", got, want)
+	}
+
+	firstParams := decodeJSONMap(t, base.callParams(1))
+	if len(firstParams) != 0 {
+		t.Fatalf("first tools/list params = %#v, want empty object", firstParams)
+	}
+	secondParams := decodeJSONMap(t, base.callParams(2))
+	if got := secondParams["cursor"]; got != "c1" {
+		t.Fatalf("second tools/list params.cursor = %#v, want c1", got)
+	}
+}
+
 func TestMCPClientListToolsErrors(t *testing.T) {
 	t.Parallel()
 

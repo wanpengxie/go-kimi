@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
@@ -15,13 +16,27 @@ var _ tools.Tool = (*MCPTool)(nil)
 
 // MCPTool adapts one MCP tool definition into tools.Tool interface.
 type MCPTool struct {
-	client     *MCPClient
-	definition MCPToolDefinition
-	serverName string
+	client      *MCPClient
+	definition  MCPToolDefinition
+	serverName  string
+	callTimeout time.Duration
 }
 
 // NewMCPTool creates one MCPTool adapter instance.
 func NewMCPTool(client *MCPClient, definition MCPToolDefinition, serverName string) *MCPTool {
+	return NewMCPToolWithTimeout(client, definition, serverName, 0)
+}
+
+// NewMCPToolWithTimeout creates one MCPTool adapter with per-call timeout.
+func NewMCPToolWithTimeout(
+	client *MCPClient,
+	definition MCPToolDefinition,
+	serverName string,
+	callTimeout time.Duration,
+) *MCPTool {
+	if callTimeout < 0 {
+		callTimeout = 0
+	}
 	return &MCPTool{
 		client: client,
 		definition: MCPToolDefinition{
@@ -29,7 +44,8 @@ func NewMCPTool(client *MCPClient, definition MCPToolDefinition, serverName stri
 			Description: strings.TrimSpace(definition.Description),
 			InputSchema: cloneRawMessage(definition.InputSchema),
 		},
-		serverName: strings.TrimSpace(serverName),
+		serverName:  strings.TrimSpace(serverName),
+		callTimeout: callTimeout,
 	}
 }
 
@@ -86,7 +102,14 @@ func (t *MCPTool) Execute(ctx context.Context, params json.RawMessage) (types.To
 		return types.ToolResult{}, fmt.Errorf("mcp tool %q: %w", t.Name(), err)
 	}
 
-	callResult, err := t.client.CallTool(ctx, name, arguments)
+	callCtx := ctx
+	cancel := func() {}
+	if t.callTimeout > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, t.callTimeout)
+	}
+	defer cancel()
+
+	callResult, err := t.client.CallTool(callCtx, name, arguments)
 	if err != nil {
 		return types.ToolResult{}, fmt.Errorf("mcp tool %q: call tool %q: %w", t.Name(), name, err)
 	}

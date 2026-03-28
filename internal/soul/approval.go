@@ -65,6 +65,16 @@ func NewApprovalState(onRequest func(*ApprovalRequest)) *ApprovalState {
 // Request asks for approval and blocks until one decision arrives or ctx is done.
 // It returns (approved, rejectFeedback).
 func (a *ApprovalState) Request(ctx context.Context, action, description string) (bool, string) {
+	return a.RequestWithToolCallID(ctx, action, description, "")
+}
+
+// RequestWithToolCallID asks for approval and associates the request with one tool call id.
+func (a *ApprovalState) RequestWithToolCallID(
+	ctx context.Context,
+	action string,
+	description string,
+	toolCallID string,
+) (bool, string) {
 	if a == nil {
 		return true, ""
 	}
@@ -74,6 +84,7 @@ func (a *ApprovalState) Request(ctx context.Context, action, description string)
 
 	action = strings.TrimSpace(action)
 	description = strings.TrimSpace(description)
+	toolCallID = strings.TrimSpace(toolCallID)
 
 	a.mu.Lock()
 	a.ensureInitializedLocked()
@@ -86,7 +97,7 @@ func (a *ApprovalState) Request(ctx context.Context, action, description string)
 	a.mu.Unlock()
 
 	if runtime != nil {
-		return a.requestWithRuntime(ctx, runtime, source, action, description)
+		return a.requestWithRuntime(ctx, runtime, source, action, description, toolCallID)
 	}
 	return a.requestLocal(ctx, action, description)
 }
@@ -131,8 +142,9 @@ func (a *ApprovalState) requestWithRuntime(
 	source approvalruntime.ApprovalSource,
 	action string,
 	description string,
+	toolCallID string,
 ) (bool, string) {
-	record, decisionCh, err := runtime.CreateRequest(ctx, source, action, description)
+	record, decisionCh, err := runtime.CreateRequestWithToolCall(ctx, source, action, description, toolCallID)
 	if err != nil {
 		return false, err.Error()
 	}

@@ -31,11 +31,11 @@ func TestTaskOutputExecuteSuccess(t *testing.T) {
 	if len(manager.getCalls) != 1 || manager.getCalls[0] != "task-1" {
 		t.Fatalf("manager GetTask calls = %#v, want [task-1]", manager.getCalls)
 	}
-	if len(manager.readCalls) != 1 {
-		t.Fatalf("manager ReadOutput call count = %d, want 1", len(manager.readCalls))
+	if len(manager.tailCalls) != 1 {
+		t.Fatalf("manager TailOutput call count = %d, want 1", len(manager.tailCalls))
 	}
-	if manager.readCalls[0].maxBytes != defaultTaskOutputMaxBytes {
-		t.Fatalf("ReadOutput maxBytes = %d, want %d", manager.readCalls[0].maxBytes, defaultTaskOutputMaxBytes)
+	if manager.tailCalls[0].maxBytes != defaultTaskOutputMaxBytes {
+		t.Fatalf("TailOutput maxBytes = %d, want %d", manager.tailCalls[0].maxBytes, defaultTaskOutputMaxBytes)
 	}
 
 	payload, ok := result.Value.Value.(map[string]any)
@@ -59,7 +59,7 @@ func TestTaskOutputExecuteReadError(t *testing.T) {
 
 	manager := &fakeTaskManager{
 		task:    sampleTaskView("task-1", corebg.TaskRunning),
-		readErr: errors.New("read failed"),
+		tailErr: errors.New("read failed"),
 	}
 	tool := NewTaskOutput(manager)
 
@@ -69,6 +69,42 @@ func TestTaskOutputExecuteReadError(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatalf("Execute(task_output read error) IsError = false, want true")
+	}
+}
+
+func TestTaskOutputExecuteWithConsumerID(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeTaskManager{
+		task:   sampleTaskView("task-1", corebg.TaskRunning),
+		output: []byte("consumer output"),
+	}
+	tool := NewTaskOutput(manager)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task_id":"task-1","consumer_id":"ui-main"}`))
+	if err != nil {
+		t.Fatalf("Execute(task_output consumer) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(task_output consumer) IsError = true, result=%#v", result)
+	}
+	if len(manager.consumerCalls) != 1 {
+		t.Fatalf("ReadConsumerOutput call count = %d, want 1", len(manager.consumerCalls))
+	}
+	if len(manager.tailCalls) != 0 {
+		t.Fatalf("TailOutput call count = %d, want 0", len(manager.tailCalls))
+	}
+
+	payload, ok := result.Value.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result payload type = %T, want map[string]any", result.Value.Value)
+	}
+	chunk, ok := payload["chunk"].(map[string]any)
+	if !ok {
+		t.Fatalf("chunk payload type = %T, want map[string]any", payload["chunk"])
+	}
+	if got, _ := chunk["consumer_id"].(string); got != "ui-main" {
+		t.Fatalf("chunk.consumer_id = %q, want ui-main", got)
 	}
 }
 
@@ -234,15 +270,19 @@ type fakeTaskManager struct {
 	tasks  []*corebg.TaskView
 	output []byte
 
-	getErr  error
-	listErr error
-	readErr error
-	killErr error
+	getErr      error
+	listErr     error
+	readErr     error
+	tailErr     error
+	consumerErr error
+	killErr     error
 
-	getCalls  []string
-	listCalls []int
-	readCalls []readCall
-	killCalls []killCall
+	getCalls      []string
+	listCalls     []int
+	readCalls     []readCall
+	tailCalls     []readCall
+	consumerCalls []consumerReadCall
+	killCalls     []killCall
 }
 
 type readCall struct {
@@ -254,6 +294,12 @@ type readCall struct {
 type killCall struct {
 	taskID string
 	reason string
+}
+
+type consumerReadCall struct {
+	taskID     string
+	consumerID string
+	maxBytes   int
 }
 
 func (m *fakeTaskManager) GetTask(taskID string) (*corebg.TaskView, error) {
@@ -285,6 +331,53 @@ func (m *fakeTaskManager) ReadOutput(taskID string, offset int64, maxBytes int) 
 		return nil, m.readErr
 	}
 	return m.output, nil
+}
+
+func (m *fakeTaskManager) TailOutput(taskID string, offset int64, maxBytes int) (corebg.TaskOutputChunk, error) {
+	m.tailCalls = append(m.tailCalls, readCall{
+		taskID:   taskID,
+		offset:   offset,
+		maxBytes: maxBytes,
+	})
+	if m.tailErr != nil {
+		return corebg.TaskOutputChunk{}, m.tailErr
+	}
+	status := corebg.TaskRunning
+	if m.task != nil {
+		status = m.task.Runtime.Status
+	}
+	return corebg.TaskOutputChunk{
+		TaskID:     taskID,
+		Status:     status,
+		Offset:     offset,
+		NextOffset: offset + int64(len(m.output)),
+		Output:     string(m.output),
+		EOF:        false,
+	}, nil
+}
+
+func (m *fakeTaskManager) ReadConsumerOutput(taskID string, consumerID string, maxBytes int) (corebg.TaskOutputChunk, error) {
+	m.consumerCalls = append(m.consumerCalls, consumerReadCall{
+		taskID:     taskID,
+		consumerID: consumerID,
+		maxBytes:   maxBytes,
+	})
+	if m.consumerErr != nil {
+		return corebg.TaskOutputChunk{}, m.consumerErr
+	}
+	status := corebg.TaskRunning
+	if m.task != nil {
+		status = m.task.Runtime.Status
+	}
+	return corebg.TaskOutputChunk{
+		TaskID:     taskID,
+		ConsumerID: consumerID,
+		Status:     status,
+		Offset:     0,
+		NextOffset: int64(len(m.output)),
+		Output:     string(m.output),
+		EOF:        false,
+	}, nil
 }
 
 func (m *fakeTaskManager) KillTask(taskID string, reason string) error {

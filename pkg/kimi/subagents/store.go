@@ -275,8 +275,28 @@ func writeRecord(path string, record *AgentInstanceRecord) error {
 	if err != nil {
 		return fmt.Errorf("subagents: marshal record: %w", err)
 	}
-	if err := os.WriteFile(path, payload, 0o644); err != nil {
-		return fmt.Errorf("subagents: write %q: %w", path, err)
+	dir := filepath.Dir(path)
+	tmpFile, err := os.CreateTemp(dir, "meta-*.tmp")
+	if err != nil {
+		return fmt.Errorf("subagents: create temp for %q: %w", path, err)
+	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(payload); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("subagents: write temp %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("subagents: close temp %q: %w", tmpPath, err)
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("subagents: chmod temp %q: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("subagents: rename %q -> %q: %w", tmpPath, path, err)
 	}
 	return nil
 }

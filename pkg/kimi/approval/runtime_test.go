@@ -193,6 +193,58 @@ func TestApprovalRuntimeCreateRequestValidation(t *testing.T) {
 	}
 }
 
+func TestApprovalRuntimeGetRequestAndToolCallID(t *testing.T) {
+	t.Parallel()
+
+	runtime := NewApprovalRuntime()
+	record, _, err := runtime.CreateRequestWithToolCall(
+		context.Background(),
+		ApprovalSource{Kind: SourceForegroundTurn, ID: "turn-tool"},
+		"shell",
+		"run command",
+		"call-42",
+	)
+	if err != nil {
+		t.Fatalf("CreateRequestWithToolCall() error = %v", err)
+	}
+
+	pending, err := runtime.GetRequest(record.ID)
+	if err != nil {
+		t.Fatalf("GetRequest(pending) error = %v", err)
+	}
+	if pending == nil {
+		t.Fatal("GetRequest(pending) = nil, want non-nil")
+	}
+	if pending.ToolCallID != "call-42" {
+		t.Fatalf("pending.ToolCallID = %q, want %q", pending.ToolCallID, "call-42")
+	}
+	if pending.ResolvedAt != nil {
+		t.Fatalf("pending.ResolvedAt = %#v, want nil", pending.ResolvedAt)
+	}
+
+	if err := runtime.Resolve(record.ID, ApprovalApprove, ""); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	resolved, err := runtime.GetRequest(record.ID)
+	if err != nil {
+		t.Fatalf("GetRequest(resolved) error = %v", err)
+	}
+	if resolved == nil || resolved.Decision == nil || *resolved.Decision != ApprovalApprove {
+		t.Fatalf("GetRequest(resolved) decision = %#v, want approve", resolved)
+	}
+	if resolved.ResolvedAt == nil {
+		t.Fatal("GetRequest(resolved).ResolvedAt = nil, want non-nil")
+	}
+	if resolved.ToolCallID != "call-42" {
+		t.Fatalf("resolved.ToolCallID = %q, want %q", resolved.ToolCallID, "call-42")
+	}
+
+	if _, err := runtime.GetRequest("missing"); !errors.Is(err, ErrRequestNotFound) {
+		t.Fatalf("GetRequest(missing) error = %v, want ErrRequestNotFound", err)
+	}
+}
+
 func waitApprovalEvent(t *testing.T, ch <-chan Event) Event {
 	t.Helper()
 	select {
