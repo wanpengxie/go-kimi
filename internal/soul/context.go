@@ -239,40 +239,25 @@ func (c *SoulContext) Replace(messages []Message, tokenCount int64) error {
 		return err
 	}
 
-	dir := filepath.Dir(path)
-	if dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("soul context: mkdir %q: %w", dir, err)
-		}
-	}
-
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("soul context: open %q: %w", path, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("soul context: close %q: %w", path, err)
-	}
-
+	records := make([]contextRecord, 0, len(messages)+1)
 	for i := range messages {
 		message := messages[i]
-		if err := appendRecord(path, contextRecord{
+		records = append(records, contextRecord{
 			Role:       string(message.Role),
 			Content:    message.Content,
 			ToolCalls:  message.ToolCalls,
 			ToolCallID: message.ToolCallID,
-		}); err != nil {
-			return err
-		}
+		})
 	}
-
 	if tokenCount > 0 {
-		if err := appendRecord(path, contextRecord{
+		records = append(records, contextRecord{
 			Role:       roleUsage,
 			TokenCount: tokenCount,
-		}); err != nil {
-			return err
-		}
+		})
+	}
+
+	if err := writeRecordsAtomically(path, records); err != nil {
+		return err
 	}
 
 	c.messages = cloneMessages(messages)
@@ -309,11 +294,6 @@ func validateMessage(m Message) error {
 }
 
 func appendRecord(path string, record contextRecord) error {
-	line, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("soul context: marshal record: %w", err)
-	}
-
 	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -329,8 +309,63 @@ func appendRecord(path string, record contextRecord) error {
 		_ = file.Close()
 	}()
 
+	if err := writeRecordLine(file, record); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeRecordsAtomically(path string, records []contextRecord) error {
+	dir := filepath.Dir(path)
+	if dir == "" {
+		dir = "."
+	}
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("soul context: mkdir %q: %w", dir, err)
+		}
+	}
+
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("soul context: create temp for %q: %w", path, err)
+	}
+	tmpPath := tmpFile.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+		_ = tmpFile.Close()
+	}()
+
+	for i := range records {
+		if err := writeRecordLine(tmpFile, records[i]); err != nil {
+			return err
+		}
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("soul context: fsync %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("soul context: close %q: %w", tmpPath, err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("soul context: rename %q -> %q: %w", tmpPath, path, err)
+	}
+	cleanup = false
+	return nil
+}
+
+func writeRecordLine(file *os.File, record contextRecord) error {
+	line, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("soul context: marshal record: %w", err)
+	}
 	if _, err := file.Write(append(line, '\n')); err != nil {
-		return fmt.Errorf("soul context: write %q: %w", path, err)
+		return fmt.Errorf("soul context: write %q: %w", file.Name(), err)
 	}
 	return nil
 }

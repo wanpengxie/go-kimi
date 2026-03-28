@@ -219,6 +219,70 @@ func TestSoulContextReplaceRewritesHistory(t *testing.T) {
 	}
 }
 
+func TestSoulContextReplaceFailureKeepsOriginalHistory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := NewSoulContext(dir)
+	originalMessages := []Message{
+		{
+			Role:    RoleUser,
+			Content: types.ContentParts{types.TextPart{Text: "old user"}},
+		},
+		{
+			Role:    RoleAssistant,
+			Content: types.ContentParts{types.TextPart{Text: "old assistant"}},
+		},
+	}
+	for i := range originalMessages {
+		if err := ctx.Append(originalMessages[i]); err != nil {
+			t.Fatalf("Append(original[%d]) error = %v", i, err)
+		}
+	}
+	ctx.UpdateTokenCount(10)
+
+	historyPath := filepath.Join(dir, contextJSONLFile)
+	beforeReplace, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile(history before replace) error = %v", err)
+	}
+
+	replacement := []Message{
+		{
+			Role:    RoleSystem,
+			Content: types.ContentParts{types.TextPart{Text: "new summary"}},
+		},
+		{
+			Role:    RoleUser,
+			Content: types.ContentParts{nil},
+		},
+	}
+
+	err = ctx.Replace(replacement, 77)
+	if err == nil || !strings.Contains(err.Error(), "marshal record") {
+		t.Fatalf("Replace() error = %v, want marshal failure", err)
+	}
+
+	afterReplace, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile(history after replace failure) error = %v", err)
+	}
+	if string(afterReplace) != string(beforeReplace) {
+		t.Fatalf("history file changed after failed replace\ngot = %q\nwant = %q", afterReplace, beforeReplace)
+	}
+
+	restored := NewSoulContext(dir)
+	if err := restored.Restore(); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if got := restored.Messages(); !reflect.DeepEqual(got, originalMessages) {
+		t.Fatalf("restored messages mismatch after failed replace\ngot = %#v\nwant = %#v", got, originalMessages)
+	}
+	if got := restored.TokenCount(); got != 10 {
+		t.Fatalf("restored TokenCount() = %d, want %d", got, 10)
+	}
+}
+
 func TestSoulContextAppendValidation(t *testing.T) {
 	t.Parallel()
 
