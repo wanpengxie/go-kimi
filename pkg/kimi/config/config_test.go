@@ -390,7 +390,7 @@ func TestSecretStrStringRedacts(t *testing.T) {
 	if got := secret.String(); got != "[REDACTED]" {
 		t.Fatalf("SecretStr.String() = %q, want [REDACTED]", got)
 	}
-	if got := fmt.Sprintf("%s", secret); got != "[REDACTED]" {
+	if got := fmt.Sprintf("%s", secret); got != "[REDACTED]" { //nolint:gosimple // intentionally testing fmt.Stringer interface via Sprintf
 		t.Fatalf("fmt.Sprintf(\"%%s\", SecretStr) = %q, want [REDACTED]", got)
 	}
 	text, err := secret.MarshalText()
