@@ -19,10 +19,12 @@ const (
 	// EngineName identifies the internal agent execution engine.
 	EngineName = "soul"
 
-	defaultMaxSteps        = 50
-	defaultMaxStepRetries  = 3
-	defaultSteerBufferSize = 64
-	defaultPlanReminderGap = 3
+	defaultMaxSteps           = 50
+	defaultMaxStepRetries     = 3
+	defaultStepRetryBaseDelay = 200 * time.Millisecond
+	defaultStepRetryMaxDelay  = 5 * time.Second
+	defaultSteerBufferSize    = 64
+	defaultPlanReminderGap    = 3
 )
 
 // ToolExecutor executes one tool call.
@@ -50,6 +52,8 @@ type StepResult struct {
 // StepRetryConfig controls retries for one failed step.
 type StepRetryConfig struct {
 	MaxRetries int
+	BaseDelay  time.Duration
+	MaxDelay   time.Duration
 }
 
 // PlanModeState stores plan mode runtime state used by pre-step reminders.
@@ -123,6 +127,8 @@ func NewSoul(
 		maxSteps:     defaultMaxSteps,
 		stepRetry: StepRetryConfig{
 			MaxRetries: defaultMaxStepRetries,
+			BaseDelay:  defaultStepRetryBaseDelay,
+			MaxDelay:   defaultStepRetryMaxDelay,
 		},
 		steerCh:              make(chan steerRequest, defaultSteerBufferSize),
 		lastPlanReminderStep: -defaultPlanReminderGap,
@@ -361,6 +367,15 @@ func (s *Soul) emitApprovalRequest(request *ApprovalRequest) {
 func normalizeStepRetryConfig(cfg StepRetryConfig) StepRetryConfig {
 	if cfg.MaxRetries < 0 {
 		cfg.MaxRetries = 0
+	}
+	if cfg.BaseDelay <= 0 {
+		cfg.BaseDelay = defaultStepRetryBaseDelay
+	}
+	if cfg.MaxDelay <= 0 {
+		cfg.MaxDelay = defaultStepRetryMaxDelay
+	}
+	if cfg.MaxDelay < cfg.BaseDelay {
+		cfg.MaxDelay = cfg.BaseDelay
 	}
 	return cfg
 }

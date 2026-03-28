@@ -339,7 +339,11 @@ func TestSoulRunRetriesTransientStepError(t *testing.T) {
 
 	wireCh := make(chan wire.WireMessage, 16)
 	s := NewSoul(provider, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "")
-	s.SetStepRetryConfig(StepRetryConfig{MaxRetries: 1})
+	s.SetStepRetryConfig(StepRetryConfig{
+		MaxRetries: 1,
+		BaseDelay:  time.Millisecond,
+		MaxDelay:   time.Millisecond,
+	})
 
 	result, err := s.Run(context.Background(), types.ContentParts{
 		types.TextPart{Text: "hello"},
@@ -368,6 +372,239 @@ func TestSoulRunRetriesTransientStepError(t *testing.T) {
 	}
 	if !hasRetryEvent {
 		t.Fatalf("wire events missing StepInterrupted retry event: %#v", events)
+	}
+}
+
+func TestSoulRunDoesNotRetryAfterToolResultEmitFailure(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{ID: "call-1", Name: "write_once"}},
+				{Done: true},
+			},
+		},
+	}
+
+	toolExecCount := 0
+	registry := mockRegistry{
+		executors: map[string]ToolExecutor{
+			"write_once": executorFunc(func(_ context.Context, call types.ToolCall) (types.ToolResult, error) {
+				toolExecCount++
+				return types.ToolResult{
+					ToolCallID: call.ID,
+					Name:       call.Name,
+					Value: types.ToolReturnValue{
+						Value: map[string]any{"ok": true},
+					},
+				}, nil
+			}),
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	toolResultEmitAttempts := 0
+	emitter := emitterFunc(func(msg wire.WireMessage) error {
+		if _, ok := msg.(wire.ToolCallResult); ok {
+			toolResultEmitAttempts++
+			if toolResultEmitAttempts == 1 {
+				return errors.New("injected tool result emit failure")
+			}
+		}
+		wireCh <- msg
+		return nil
+	})
+
+	s := NewSoul(provider, ctxStore, registry, emitter, "")
+	s.SetStepRetryConfig(StepRetryConfig{
+		MaxRetries: 2,
+		BaseDelay:  time.Millisecond,
+		MaxDelay:   time.Millisecond,
+	})
+
+	_, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "run tool"},
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want emit failure")
+	}
+	if !errors.Is(err, errToolsAlreadyExecuted) {
+		t.Fatalf("Run() error = %v, want errors.Is(errToolsAlreadyExecuted)", err)
+	}
+	if provider.CallCount() != 1 {
+		t.Fatalf("provider.CallCount() = %d, want 1", provider.CallCount())
+	}
+	if toolExecCount != 1 {
+		t.Fatalf("tool execution count = %d, want 1", toolExecCount)
+	}
+
+	events := drainWireMessages(wireCh)
+	for i := range events {
+		if _, ok := events[i].(wire.StepInterrupted); ok {
+			t.Fatalf("unexpected StepInterrupted event when tool result emit failed: %#v", events[i])
+		}
+	}
+}
+
+func TestSoulRunDoesNotRetryContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streamErrs: []error{context.Canceled},
+	}
+	wireCh := make(chan wire.WireMessage, 16)
+
+	s := NewSoul(provider, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.SetStepRetryConfig(StepRetryConfig{
+		MaxRetries: 2,
+		BaseDelay:  time.Millisecond,
+		MaxDelay:   time.Millisecond,
+	})
+
+	_, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "hello"},
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want context.Canceled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want errors.Is(context.Canceled)", err)
+	}
+	if provider.CallCount() != 1 {
+		t.Fatalf("provider.CallCount() = %d, want 1", provider.CallCount())
+	}
+
+	events := drainWireMessages(wireCh)
+	for i := range events {
+		if _, ok := events[i].(wire.StepInterrupted); ok {
+			t.Fatalf("unexpected StepInterrupted event for context.Canceled: %#v", events[i])
+		}
+	}
+}
+
+func TestSoulRunRetryExhaustedErrorWrapsLastError(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	transientErr := errors.New("temporary stream failure")
+	provider := &scriptedChatProvider{
+		streamErrs: []error{transientErr, transientErr, transientErr},
+	}
+	wireCh := make(chan wire.WireMessage, 16)
+
+	s := NewSoul(provider, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.SetStepRetryConfig(StepRetryConfig{
+		MaxRetries: 2,
+		BaseDelay:  time.Millisecond,
+		MaxDelay:   time.Millisecond,
+	})
+
+	_, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "hello"},
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want retry exhausted error")
+	}
+	if !errors.Is(err, transientErr) {
+		t.Fatalf("Run() error = %v, want errors.Is(transientErr)", err)
+	}
+	if !strings.Contains(err.Error(), "step 1 failed after 2 retries") {
+		t.Fatalf("Run() error = %q, want contains %q", err.Error(), "step 1 failed after 2 retries")
+	}
+	if provider.CallCount() != 3 {
+		t.Fatalf("provider.CallCount() = %d, want 3", provider.CallCount())
+	}
+
+	events := drainWireMessages(wireCh)
+	retryEvents := 0
+	for i := range events {
+		if _, ok := events[i].(wire.StepInterrupted); ok {
+			retryEvents++
+		}
+	}
+	if retryEvents != 2 {
+		t.Fatalf("StepInterrupted count = %d, want 2", retryEvents)
+	}
+}
+
+func TestSoulRunRetryBackoffAppliesMinimumDelay(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Done: true},
+			},
+		},
+		streamErrs: []error{
+			errors.New("temporary stream failure"),
+		},
+	}
+
+	s := NewSoul(provider, ctxStore, mockRegistry{}, wire.NoopEmitter{}, "")
+	s.SetStepRetryConfig(StepRetryConfig{
+		MaxRetries: 1,
+		BaseDelay:  30 * time.Millisecond,
+		MaxDelay:   30 * time.Millisecond,
+	})
+
+	started := time.Now()
+	_, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "hello"},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if provider.CallCount() != 2 {
+		t.Fatalf("provider.CallCount() = %d, want 2", provider.CallCount())
+	}
+	if elapsed := time.Since(started); elapsed < 25*time.Millisecond {
+		t.Fatalf("retry elapsed = %v, want >= 25ms", elapsed)
+	}
+}
+
+func TestSoulRunDoesNotRetrySystemPromptTemplateParseError(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{Done: true},
+			},
+		},
+	}
+	wireCh := make(chan wire.WireMessage, 16)
+
+	s := NewSoul(provider, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "{{.WorkDir")
+	s.SetStepRetryConfig(StepRetryConfig{
+		MaxRetries: 2,
+		BaseDelay:  time.Millisecond,
+		MaxDelay:   time.Millisecond,
+	})
+
+	_, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "hello"},
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want template parse error")
+	}
+	if !strings.Contains(err.Error(), "parse system prompt template") {
+		t.Fatalf("Run() error = %q, want contains parse system prompt template", err.Error())
+	}
+	if provider.CallCount() != 0 {
+		t.Fatalf("provider.CallCount() = %d, want 0", provider.CallCount())
+	}
+
+	events := drainWireMessages(wireCh)
+	for i := range events {
+		if _, ok := events[i].(wire.StepInterrupted); ok {
+			t.Fatalf("unexpected StepInterrupted event for template parse error: %#v", events[i])
+		}
 	}
 }
 
@@ -939,6 +1176,12 @@ type executorFunc func(ctx context.Context, call types.ToolCall) (types.ToolResu
 
 func (f executorFunc) Execute(ctx context.Context, call types.ToolCall) (types.ToolResult, error) {
 	return f(ctx, call)
+}
+
+type emitterFunc func(msg wire.WireMessage) error
+
+func (f emitterFunc) Emit(msg wire.WireMessage) error {
+	return f(msg)
 }
 
 type mockRegistry struct {

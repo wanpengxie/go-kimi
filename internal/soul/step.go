@@ -15,6 +15,8 @@ import (
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
+var errToolsAlreadyExecuted = errors.New("soul step: tools already executed")
+
 func (s *Soul) step(ctx context.Context, turnID string) (StepResult, error) {
 	if err := s.ensureReady(); err != nil {
 		return StepResult{}, err
@@ -112,7 +114,7 @@ func (s *Soul) executeTools(ctx context.Context, toolCalls []types.ToolCall) ([]
 			ID:     toolCalls[i].ID,
 			Result: results[i],
 		}); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: emit tool call result: %w", errToolsAlreadyExecuted, err)
 		}
 	}
 

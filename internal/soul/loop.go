@@ -165,6 +165,13 @@ func (s *Soul) stepWithRetry(ctx context.Context, turnID string, stepIndex int) 
 		}); emitErr != nil {
 			return StepResult{}, emitErr
 		}
+
+		delay := stepRetryDelay(cfg, attempt)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return StepResult{}, ctx.Err()
+		}
 	}
 	return StepResult{}, fmt.Errorf("soul run: step %d failed after %d retries: %w", stepIndex, cfg.MaxRetries, lastErr)
 }
@@ -176,7 +183,27 @@ func shouldRetryStepError(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
+	if errors.Is(err, errToolsAlreadyExecuted) {
+		return false
+	}
+	if strings.Contains(err.Error(), "parse system prompt template") {
+		return false
+	}
 	return true
+}
+
+func stepRetryDelay(cfg StepRetryConfig, attempt int) time.Duration {
+	delay := cfg.BaseDelay
+	for i := 0; i < attempt; i++ {
+		if delay >= cfg.MaxDelay/2 {
+			return cfg.MaxDelay
+		}
+		delay *= 2
+	}
+	if delay > cfg.MaxDelay {
+		return cfg.MaxDelay
+	}
+	return delay
 }
 
 func (s *Soul) consumeSteerInputs(turnID string) (bool, error) {
