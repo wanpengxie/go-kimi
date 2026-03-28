@@ -55,14 +55,57 @@ hello
 	}
 }
 
-func TestParseSkillMarkdownRejectsUnsupportedType(t *testing.T) {
+func TestParseSkillMarkdownParsesFlowType(t *testing.T) {
 	t.Parallel()
 
-	_, err := parseSkillMarkdown("/tmp/skills/flow", `---
+	sk, err := parseSkillMarkdown("/tmp/skills/flow", `---
 name: flow
 type: flow
 ---
-graph TD
+`+"```mermaid\n"+`flowchart TD
+BEGIN --> TASK
+TASK --> END
+`+"```\n")
+	if err != nil {
+		t.Fatalf("parseSkillMarkdown() error = %v", err)
+	}
+	if sk.Type != "flow" {
+		t.Fatalf("skill.Type = %q, want flow", sk.Type)
+	}
+	if sk.Flow == nil {
+		t.Fatal("skill.Flow = nil, want parsed flow")
+	}
+}
+
+func TestParseSkillMarkdownFlowParseFailureFallsBackToStandard(t *testing.T) {
+	t.Parallel()
+
+	sk, err := parseSkillMarkdown("/tmp/skills/broken-flow", `---
+name: broken-flow
+type: flow
+---
+`+"```mermaid\n"+`flowchart TD
+A --> B
+`+"```\n")
+	if err != nil {
+		t.Fatalf("parseSkillMarkdown() error = %v", err)
+	}
+	if sk.Type != "standard" {
+		t.Fatalf("skill.Type = %q, want standard fallback", sk.Type)
+	}
+	if sk.Flow != nil {
+		t.Fatalf("skill.Flow = %#v, want nil", sk.Flow)
+	}
+}
+
+func TestParseSkillMarkdownRejectsUnsupportedType(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseSkillMarkdown("/tmp/skills/unsupported", `---
+name: unsupported
+type: custom
+---
+body
 `)
 	if err == nil || !strings.Contains(err.Error(), "unsupported type") {
 		t.Fatalf("parseSkillMarkdown() error = %v, want unsupported type", err)

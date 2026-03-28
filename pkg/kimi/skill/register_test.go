@@ -12,6 +12,7 @@ import (
 
 	"github.com/xiewanpeng/go-kimi/internal/soul"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+	skillflow "github.com/xiewanpeng/go-kimi/pkg/kimi/skill/flow"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
@@ -370,6 +371,105 @@ func TestRegisterSkillsParallelSkillToolCallsRemainAvailable(t *testing.T) {
 		if toolPayloads[i] != "skill done" {
 			t.Fatalf("tool payload[%d] = %q, want skill done", i, toolPayloads[i])
 		}
+	}
+}
+
+func TestRegisterSkillsFlowSkillRunsThroughFlowRunner(t *testing.T) {
+	t.Parallel()
+
+	provider := &scriptedProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{
+					ToolCall: &types.ToolCall{
+						ID:   "call-flow",
+						Name: "skill:review",
+					},
+				},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "analyzed"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "pick <choice>done</choice>"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "flow finished"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "outer done"}},
+				{Done: true},
+			},
+		},
+	}
+
+	engine := soul.NewSoul(provider, soul.NewSoulContext(t.TempDir()), tools.NewMapToolRegistry(&noopTool{name: "echo"}), wire.NoopEmitter{}, "")
+
+	flowGraph := &skillflow.Flow{
+		Nodes: map[string]skillflow.FlowNode{
+			"BEGIN": {ID: "BEGIN", Label: "BEGIN", Kind: skillflow.NodeKindBegin},
+			"A":     {ID: "A", Label: "analyze code", Kind: skillflow.NodeKindTask},
+			"B":     {ID: "B", Label: "is it done?", Kind: skillflow.NodeKindDecision},
+			"C":     {ID: "C", Label: "write summary", Kind: skillflow.NodeKindTask},
+			"END":   {ID: "END", Label: "END", Kind: skillflow.NodeKindEnd},
+		},
+		Outgoing: map[string][]skillflow.FlowEdge{
+			"BEGIN": {{Src: "BEGIN", Dst: "A"}},
+			"A":     {{Src: "A", Dst: "B"}},
+			"B": {
+				{Src: "B", Dst: "A", Label: "retry"},
+				{Src: "B", Dst: "C", Label: "done"},
+			},
+			"C":   {{Src: "C", Dst: "END"}},
+			"END": nil,
+		},
+		BeginID: "BEGIN",
+		EndID:   "END",
+	}
+
+	RegisterSkills(engine, map[string]*Skill{
+		"review": {
+			Name:        "review",
+			Description: "flow review",
+			Type:        "flow",
+			Flow:        flowGraph,
+		},
+	})
+
+	result, err := engine.Run(context.Background(), types.ContentParts{types.TextPart{Text: "start"}})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := textFromParts(result.Content); got != "outer done" {
+		t.Fatalf("result text = %q, want outer done", got)
+	}
+	if provider.CallCount() != 5 {
+		t.Fatalf("provider call count = %d, want 5", provider.CallCount())
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 5 {
+		t.Fatalf("len(requests) = %d, want 5", len(requests))
+	}
+	decisionPrompt := textFromParts(requests[2].Messages[len(requests[2].Messages)-1].Content)
+	if !strings.Contains(decisionPrompt, "Available branches:") {
+		t.Fatalf("decision prompt = %q, want branch hints", decisionPrompt)
+	}
+
+	outerFollowup := requests[4]
+	toolPayload := ""
+	for i := range outerFollowup.Messages {
+		if outerFollowup.Messages[i].Role != "tool" {
+			continue
+		}
+		toolPayload = textFromParts(outerFollowup.Messages[i].Content)
+	}
+	if toolPayload != "flow finished" {
+		t.Fatalf("flow tool payload = %q, want flow finished", toolPayload)
 	}
 }
 

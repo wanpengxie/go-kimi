@@ -11,6 +11,7 @@ import (
 
 	"github.com/xiewanpeng/go-kimi/internal/soul"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+	skillflow "github.com/xiewanpeng/go-kimi/pkg/kimi/skill/flow"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -41,8 +42,15 @@ func RegisterSkills(s *soul.Soul, skills map[string]*Skill) {
 		return
 	}
 
+	inputKeys := make([]string, 0, len(skills))
+	for key := range skills {
+		inputKeys = append(inputKeys, key)
+	}
+	sort.Strings(inputKeys)
+
 	normalized := make(map[string]*Skill, len(skills))
-	for key, candidate := range skills {
+	for _, key := range inputKeys {
+		candidate := skills[key]
 		if candidate == nil {
 			continue
 		}
@@ -55,7 +63,11 @@ func RegisterSkills(s *soul.Soul, skills map[string]*Skill) {
 			continue
 		}
 
-		normalized[name] = candidate
+		normalizedName := normalizeSkillName(name)
+		if normalizedName == "" {
+			continue
+		}
+		normalized[normalizedName] = candidate
 	}
 
 	names := make([]string, 0, len(normalized))
@@ -65,8 +77,13 @@ func RegisterSkills(s *soul.Soul, skills map[string]*Skill) {
 	sort.Strings(names)
 
 	for i := range names {
-		name := names[i]
-		sk := normalized[name]
+		normalizedName := names[i]
+		sk := normalized[normalizedName]
+
+		name := strings.TrimSpace(sk.Name)
+		if name == "" {
+			name = normalizedName
+		}
 		toolName := skillToolName(name)
 
 		registry.register(
@@ -114,10 +131,6 @@ func (r *SkillRunner) Execute(ctx context.Context, call types.ToolCall) (types.T
 	}
 
 	input := buildSkillInput(r.skill.Content, args)
-	if strings.TrimSpace(input) == "" {
-		return toolError(call, "skill content is empty"), nil
-	}
-
 	if r.runMu != nil {
 		r.runMu.Lock()
 		defer r.runMu.Unlock()
@@ -128,6 +141,24 @@ func (r *SkillRunner) Execute(ctx context.Context, call types.ToolCall) (types.T
 		disableSkillToolRestore = r.registry.enterNestedSkillToolDisabled()
 	}
 	defer disableSkillToolRestore()
+
+	if strings.EqualFold(strings.TrimSpace(r.skill.Type), flowType) && r.skill.Flow != nil {
+		output, err := runFlowSkill(markNestedSkillExecution(ctx), r.soul, r.skill.Flow)
+		if err != nil {
+			return toolError(call, fmt.Sprintf("run flow skill %q: %v", r.skill.Name, err)), nil
+		}
+		return types.ToolResult{
+			ToolCallID: strings.TrimSpace(call.ID),
+			Name:       strings.TrimSpace(call.Name),
+			Value: types.ToolReturnValue{
+				Value: strings.TrimSpace(output),
+			},
+		}, nil
+	}
+
+	if strings.TrimSpace(input) == "" {
+		return toolError(call, "skill content is empty"), nil
+	}
 
 	runResult, runErr := r.soul.Run(markNestedSkillExecution(ctx), types.ContentParts{
 		types.TextPart{Text: input},
@@ -143,6 +174,19 @@ func (r *SkillRunner) Execute(ctx context.Context, call types.ToolCall) (types.T
 			Value: contentPartsText(runResult.Content),
 		},
 	}, nil
+}
+
+func runFlowSkill(ctx context.Context, runner *soul.Soul, graph *skillflow.Flow) (string, error) {
+	flowRunner := skillflow.Runner{
+		Flow: graph,
+	}
+	return flowRunner.Run(ctx, func(turnCtx context.Context, prompt string) (string, error) {
+		result, err := runner.Run(turnCtx, types.ContentParts{types.TextPart{Text: prompt}})
+		if err != nil {
+			return "", err
+		}
+		return contentPartsText(result.Content), nil
+	})
 }
 
 type skillRegistry struct {

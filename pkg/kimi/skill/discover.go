@@ -87,7 +87,7 @@ func DiscoverFromRoots(roots []string) (map[string]*Skill, error) {
 			if skill == nil || strings.TrimSpace(skill.Name) == "" {
 				continue
 			}
-			merged[skill.Name] = skill
+			merged[normalizeSkillName(skill.Name)] = skill
 		}
 	}
 	return merged, nil
@@ -120,4 +120,8 @@ func DefaultSkillRoots(workDir string) []string {
 		roots = append(roots, filepath.Join(workDir, filepath.FromSlash(projectSkillDir)))
 	}
 	return roots
+}
+
+func normalizeSkillName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }

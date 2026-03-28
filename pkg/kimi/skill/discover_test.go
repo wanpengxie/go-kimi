@@ -70,6 +70,27 @@ func TestDiscoverFromRootsHigherPriorityOverrides(t *testing.T) {
 	}
 }
 
+func TestDiscoverFromRootsNormalizesNameCase(t *testing.T) {
+	t.Parallel()
+
+	low := t.TempDir()
+	high := t.TempDir()
+
+	writeSkillMarkdown(t, filepath.Join(low, "demo", FileName), "Demo", "from-low", "low body")
+	writeSkillMarkdown(t, filepath.Join(high, "demo", FileName), "demo", "from-high", "high body")
+
+	skills, err := DiscoverFromRoots([]string{low, high})
+	if err != nil {
+		t.Fatalf("DiscoverFromRoots() error = %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("len(skills) = %d, want 1", len(skills))
+	}
+	if got := skills["demo"]; got == nil || got.Description != "from-high" {
+		t.Fatalf("skills[demo] = %#v, want normalized key demo from-high", got)
+	}
+}
+
 func TestDefaultSkillRootsOrder(t *testing.T) {
 	workDir := filepath.Join(t.TempDir(), "work")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {

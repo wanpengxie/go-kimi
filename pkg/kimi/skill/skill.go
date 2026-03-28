@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	skillflow "github.com/xiewanpeng/go-kimi/pkg/kimi/skill/flow"
 )
 
 const (
@@ -13,6 +15,7 @@ const (
 	FileName = "SKILL.md"
 
 	standardType = "standard"
+	flowType     = "flow"
 )
 
 // Skill is one parsed SKILL.md definition.
@@ -22,6 +25,7 @@ type Skill struct {
 	Type        string
 	Dir         string
 	Content     string
+	Flow        *skillflow.Flow
 }
 
 // ParseSkillFile loads and parses one SKILL.md file.
@@ -54,12 +58,23 @@ func parseSkillMarkdown(dir, markdown string) (*Skill, error) {
 		return nil, errors.New("skill: frontmatter field name is required")
 	}
 
-	skillType := strings.TrimSpace(fields["type"])
+	skillType := strings.ToLower(strings.TrimSpace(fields["type"]))
 	if skillType == "" {
 		skillType = standardType
 	}
-	if skillType != standardType {
+	if skillType != standardType && skillType != flowType {
 		return nil, fmt.Errorf("skill: unsupported type %q", skillType)
+	}
+
+	var parsedFlow *skillflow.Flow
+	if skillType == flowType {
+		flowGraph, flowErr := parseFlowFromSkill(markdown)
+		if flowErr == nil {
+			parsedFlow = flowGraph
+		} else {
+			// Keep the skill loadable and degrade to standard type when flow diagram is invalid.
+			skillType = standardType
+		}
 	}
 
 	return &Skill{
@@ -68,6 +83,7 @@ func parseSkillMarkdown(dir, markdown string) (*Skill, error) {
 		Type:        skillType,
 		Dir:         filepath.Clean(strings.TrimSpace(dir)),
 		Content:     body,
+		Flow:        parsedFlow,
 	}, nil
 }
 
@@ -121,4 +137,116 @@ func normalizeMarkdown(markdown string) string {
 	markdown = strings.TrimPrefix(markdown, "\ufeff")
 	markdown = strings.ReplaceAll(markdown, "\r\n", "\n")
 	return strings.ReplaceAll(markdown, "\r", "\n")
+}
+
+func parseFlowFromSkill(markdown string) (*skillflow.Flow, error) {
+	blocks := iterFencedCodeBlocks(markdown)
+	for i := range blocks {
+		switch blocks[i].lang {
+		case "mermaid":
+			return skillflow.ParseMermaidFlowchart(blocks[i].code)
+		case "d2":
+			return skillflow.ParseD2Flowchart(blocks[i].code)
+		}
+	}
+	return nil, errors.New("flow skills require a mermaid or d2 code block in SKILL.md")
+}
+
+type fencedCodeBlock struct {
+	lang string
+	code string
+}
+
+func iterFencedCodeBlocks(markdown string) []fencedCodeBlock {
+	lines := strings.Split(normalizeMarkdown(markdown), "\n")
+	blocks := make([]fencedCodeBlock, 0)
+
+	inBlock := false
+	fenceChar := byte(0)
+	fenceLen := 0
+	lang := ""
+	content := make([]string, 0)
+
+	for i := range lines {
+		stripped := strings.TrimLeft(lines[i], " \t")
+		if !inBlock {
+			opened, openChar, openLen, info := parseFenceOpen(stripped)
+			if !opened {
+				continue
+			}
+			inBlock = true
+			fenceChar = openChar
+			fenceLen = openLen
+			lang = normalizeCodeBlockLang(info)
+			content = content[:0]
+			continue
+		}
+
+		if isFenceClose(stripped, fenceChar, fenceLen) {
+			blocks = append(blocks, fencedCodeBlock{
+				lang: lang,
+				code: strings.Trim(strings.Join(content, "\n"), "\n"),
+			})
+			inBlock = false
+			fenceChar = 0
+			fenceLen = 0
+			lang = ""
+			content = content[:0]
+			continue
+		}
+
+		content = append(content, lines[i])
+	}
+
+	return blocks
+}
+
+func parseFenceOpen(line string) (bool, byte, int, string) {
+	if len(line) < 3 {
+		return false, 0, 0, ""
+	}
+	if line[0] != '`' && line[0] != '~' {
+		return false, 0, 0, ""
+	}
+
+	fenceChar := line[0]
+	count := 0
+	for count < len(line) && line[count] == fenceChar {
+		count++
+	}
+	if count < 3 {
+		return false, 0, 0, ""
+	}
+	return true, fenceChar, count, strings.TrimSpace(line[count:])
+}
+
+func isFenceClose(line string, fenceChar byte, fenceLen int) bool {
+	if fenceChar == 0 || fenceLen < 3 || len(line) < fenceLen || line[0] != fenceChar {
+		return false
+	}
+	count := 0
+	for count < len(line) && line[count] == fenceChar {
+		count++
+	}
+	if count < fenceLen {
+		return false
+	}
+	return strings.TrimSpace(line[count:]) == ""
+}
+
+func normalizeCodeBlockLang(info string) string {
+	info = strings.TrimSpace(info)
+	if info == "" {
+		return ""
+	}
+
+	parts := strings.Fields(info)
+	if len(parts) == 0 {
+		return ""
+	}
+	lang := strings.ToLower(strings.TrimSpace(parts[0]))
+	if strings.HasPrefix(lang, "{") && strings.HasSuffix(lang, "}") && len(lang) >= 2 {
+		lang = strings.TrimSpace(lang[1 : len(lang)-1])
+	}
+	return lang
 }
