@@ -923,17 +923,6 @@ func cloneStringMap(src map[string]string) map[string]string {
 	return out
 }
 
-type wireFileEmitter struct {
-	file *wire.WireFile
-}
-
-func (e wireFileEmitter) Emit(msg wire.WireMessage) error {
-	if e.file == nil {
-		return stdErrors.New("kimi: nil wire file")
-	}
-	return e.file.AppendMessage(msg)
-}
-
 type compositeEmitter struct {
 	emitters []wire.Emitter
 }
