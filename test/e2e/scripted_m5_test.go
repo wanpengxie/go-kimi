@@ -5,8 +5,8 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -212,17 +212,27 @@ func TestScriptedContextCompaction(t *testing.T) {
 func TestScriptedFetchURL(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html>
+	const fetchURL = "https://93.184.216.34/scripted-fetch"
+	fetchClient := &http.Client{
+		Transport: scriptedRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.URL.String(); got != fetchURL {
+				t.Fatalf("request URL = %q, want %q", got, fetchURL)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/html; charset=utf-8"},
+				},
+				Body: io.NopCloser(strings.NewReader(`<!doctype html>
 <html>
   <body>
     <h1>Scripted Fetch Heading</h1>
     <p>Scripted fetch token 2026</p>
   </body>
-</html>`))
-	}))
-	t.Cleanup(server.Close)
+</html>`)),
+			}, nil
+		}),
+	}
 
 	ctxStore := soul.NewSoulContext(t.TempDir())
 	provider := &scriptedChatProvider{
@@ -233,7 +243,7 @@ func TestScriptedFetchURL(t *testing.T) {
 						ID:   "call-fetch-1",
 						Name: "fetch_url",
 						Arguments: map[string]any{
-							"url": server.URL,
+							"url": fetchURL,
 						},
 					},
 				},
@@ -249,7 +259,7 @@ func TestScriptedFetchURL(t *testing.T) {
 	engine := soul.NewSoul(
 		provider,
 		ctxStore,
-		tools.NewMapToolRegistry(web.NewFetchURL(server.Client())),
+		tools.NewMapToolRegistry(web.NewFetchURL(fetchClient)),
 		wire.NoopEmitter{},
 		"",
 	)
@@ -275,6 +285,12 @@ func TestScriptedFetchURL(t *testing.T) {
 	if !strings.Contains(toolOutput, "Scripted fetch token 2026") {
 		t.Fatalf("tool output = %q, want contains Scripted fetch token 2026", toolOutput)
 	}
+}
+
+type scriptedRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn scriptedRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
 func TestScriptedPlanModeStateMachine(t *testing.T) {

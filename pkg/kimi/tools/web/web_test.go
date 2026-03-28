@@ -3,6 +3,9 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,15 +20,23 @@ import (
 func TestFetchURLExecutePlainTextSuccess(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("alpha\nbeta"))
-	}))
-	t.Cleanup(server.Close)
+	const fetchURL = "http://docs.example/plain"
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.URL.String(); got != fetchURL {
+				t.Fatalf("request URL = %q, want %q", got, fetchURL)
+			}
+			return mockHTTPResponse(http.StatusOK, "text/plain; charset=utf-8", "alpha\nbeta"), nil
+		}),
+	})
+	tool.resolver = staticHostResolver{
+		"docs.example": {
+			{IP: net.ParseIP("93.184.216.34")},
+		},
+	}
 
-	tool := NewFetchURL(server.Client())
 	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
-		"url": server.URL,
+		"url": fetchURL,
 	}))
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -41,9 +52,9 @@ func TestFetchURLExecutePlainTextSuccess(t *testing.T) {
 func TestFetchURLExecuteHTMLExtractsText(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html>
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return mockHTTPResponse(http.StatusOK, "text/html; charset=utf-8", `<!doctype html>
 <html>
   <head>
     <title>ignored title</title>
@@ -54,13 +65,12 @@ func TestFetchURLExecuteHTMLExtractsText(t *testing.T) {
     <h1>Article</h1>
     <p>Hello &amp; world.</p>
   </body>
-</html>`))
-	}))
-	t.Cleanup(server.Close)
+</html>`), nil
+		}),
+	})
 
-	tool := NewFetchURL(server.Client())
 	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
-		"url": server.URL,
+		"url": "http://93.184.216.34/article",
 	}))
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -82,15 +92,13 @@ func TestFetchURLExecuteHTMLExtractsText(t *testing.T) {
 func TestFetchURLExecuteStatusError(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte("upstream unavailable"))
-	}))
-	t.Cleanup(server.Close)
-
-	tool := NewFetchURL(server.Client())
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return mockHTTPResponse(http.StatusBadGateway, "", "upstream unavailable"), nil
+		}),
+	})
 	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
-		"url": server.URL,
+		"url": "http://93.184.216.34/status",
 	}))
 	if err != nil {
 		t.Fatalf("Execute() error = %v, want nil", err)
@@ -106,19 +114,20 @@ func TestFetchURLExecuteStatusError(t *testing.T) {
 func TestFetchURLExecuteTimeoutReturnsToolError(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(120 * time.Millisecond)
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("slow"))
-	}))
-	t.Cleanup(server.Close)
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			select {
+			case <-time.After(120 * time.Millisecond):
+				return mockHTTPResponse(http.StatusOK, "text/plain", "slow"), nil
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			}
+		}),
+	})
+	tool.Timeout = 20 * time.Millisecond
 
-	client := server.Client()
-	client.Timeout = 20 * time.Millisecond
-
-	tool := NewFetchURL(client)
 	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
-		"url": server.URL,
+		"url": "http://93.184.216.34/slow",
 	}))
 	if err != nil {
 		t.Fatalf("Execute() error = %v, want nil", err)
@@ -143,19 +152,67 @@ func TestFetchURLExecuteRejectsInvalidURL(t *testing.T) {
 	}
 }
 
+func TestFetchURLExecuteRejectsBlockedTargetHost(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(nil)
+
+	testCases := []string{
+		"http://localhost/path",
+		"http://127.0.0.1/path",
+		"http://10.0.0.8/path",
+		"http://169.254.169.254/latest/meta-data",
+		"http://[::1]/path",
+		"http://[fc00::1]/path",
+	}
+
+	for i := range testCases {
+		_, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+			"url": testCases[i],
+		}))
+		if err == nil {
+			t.Fatalf("Execute(%q) error = nil, want blocked host error", testCases[i])
+		}
+	}
+}
+
+func TestFetchURLExecuteRejectsHostnameResolvingToBlockedIP(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("RoundTrip should not be called when target host is blocked")
+			return nil, nil
+		}),
+	})
+	tool.resolver = staticHostResolver{
+		"internal.example": {
+			{IP: net.ParseIP("10.0.0.10")},
+		},
+	}
+
+	_, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url": "http://internal.example/private",
+	}))
+	if err == nil {
+		t.Fatal("Execute() error = nil, want blocked host error")
+	}
+	if !strings.Contains(err.Error(), "blocked address") {
+		t.Fatalf("Execute() error = %v, want contains blocked address", err)
+	}
+}
+
 func TestFetchURLExecuteTruncatesLongOutput(t *testing.T) {
 	t.Parallel()
 
 	longLine := strings.Repeat("x", tools.MaxLineLengthChars+300)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte(longLine + "\n" + longLine))
-	}))
-	t.Cleanup(server.Close)
-
-	tool := NewFetchURL(server.Client())
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return mockHTTPResponse(http.StatusOK, "text/plain", longLine+"\n"+longLine), nil
+		}),
+	})
 	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
-		"url": server.URL,
+		"url": "http://93.184.216.34/long",
 	}))
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -352,6 +409,34 @@ func TestSearchWebExecuteInvalidJSONResponse(t *testing.T) {
 	}
 	if !strings.Contains(resultOutputText(t, result), "decode response") {
 		t.Fatalf("result output = %q, want contains decode response", resultOutputText(t, result))
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+type staticHostResolver map[string][]net.IPAddr
+
+func (s staticHostResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	addresses, ok := s[host]
+	if !ok {
+		return nil, fmt.Errorf("host not found: %s", host)
+	}
+	return addresses, nil
+}
+
+func mockHTTPResponse(statusCode int, contentType, body string) *http.Response {
+	header := make(http.Header)
+	if strings.TrimSpace(contentType) != "" {
+		header.Set("Content-Type", contentType)
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Header:     header,
+		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -52,10 +53,18 @@ type FetchURL struct {
 	UserAgent       string
 	Timeout         time.Duration
 	MaxContentBytes int64
+
+	resolver hostLookupResolver
 }
 
 type fetchParams struct {
 	URL string `json:"url"`
+
+	parsedURL *url.URL
+}
+
+type hostLookupResolver interface {
+	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
 // NewFetchURL creates a fetch_url tool.
@@ -91,6 +100,10 @@ func (t *FetchURL) Execute(ctx context.Context, params json.RawMessage) (types.T
 
 	runCtx, cancel := context.WithTimeout(ctx, t.requestTimeout())
 	defer cancel()
+
+	if err := validateFetchTargetHost(runCtx, input.parsedURL, t.hostResolver()); err != nil {
+		return types.ToolResult{}, err
+	}
 
 	req, err := http.NewRequestWithContext(runCtx, http.MethodGet, input.URL, nil)
 	if err != nil {
@@ -144,7 +157,66 @@ func decodeFetchParams(raw json.RawMessage) (fetchParams, error) {
 	if scheme != "http" && scheme != "https" {
 		return fetchParams{}, errors.New("fetch_url: url scheme must be http or https")
 	}
+	if parsed.Hostname() == "" {
+		return fetchParams{}, errors.New("fetch_url: url host is required")
+	}
+	input.parsedURL = parsed
 	return input, nil
+}
+
+func validateFetchTargetHost(ctx context.Context, parsedURL *url.URL, resolver hostLookupResolver) error {
+	if parsedURL == nil {
+		return errors.New("fetch_url: invalid url host")
+	}
+
+	host := strings.TrimSpace(parsedURL.Hostname())
+	if host == "" {
+		return errors.New("fetch_url: url host is required")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return errors.New("fetch_url: localhost is not allowed")
+	}
+
+	if ip := parseHostIP(host); ip != nil {
+		if isBlockedFetchIP(ip) {
+			return fmt.Errorf("fetch_url: target address %s is not allowed", ip.String())
+		}
+		return nil
+	}
+
+	resolved, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return fmt.Errorf("fetch_url: resolve host %q: %w", host, err)
+	}
+	if len(resolved) == 0 {
+		return fmt.Errorf("fetch_url: resolve host %q: no IP addresses found", host)
+	}
+
+	for i := range resolved {
+		if isBlockedFetchIP(resolved[i].IP) {
+			return fmt.Errorf("fetch_url: target host %q resolves to blocked address %s", host, resolved[i].IP.String())
+		}
+	}
+	return nil
+}
+
+func parseHostIP(host string) net.IP {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip
+	}
+	if idx := strings.LastIndex(host, "%"); idx > 0 {
+		if ip := net.ParseIP(host[:idx]); ip != nil {
+			return ip
+		}
+	}
+	return nil
+}
+
+func isBlockedFetchIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 func (t *FetchURL) httpClient() *http.Client {
@@ -152,6 +224,13 @@ func (t *FetchURL) httpClient() *http.Client {
 		return t.Client
 	}
 	return &http.Client{}
+}
+
+func (t *FetchURL) hostResolver() hostLookupResolver {
+	if t != nil && t.resolver != nil {
+		return t.resolver
+	}
+	return net.DefaultResolver
 }
 
 func (t *FetchURL) userAgent() string {
