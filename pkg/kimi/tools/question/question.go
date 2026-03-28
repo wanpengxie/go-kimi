@@ -168,21 +168,21 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage) (types.ToolR
 		return errorResult("ask_user_question: wire publisher is not configured"), nil
 	}
 
+	if t.isYolo() {
+		return successResult(map[string]any{
+			"request_id": newQuestionRequestID(),
+			"dismissed":  true,
+			"reason":     "yolo_mode",
+			"answers":    map[string]string{},
+		}), nil
+	}
+
 	request := buildQuestionRequest(input)
 	subscriber := t.Hub.Subscribe()
 	defer t.Hub.Unsubscribe(subscriber)
 
 	if emitErr := publisher.Emit(request); emitErr != nil {
 		return errorResult(fmt.Sprintf("ask_user_question: publish question request: %v", emitErr)), nil
-	}
-
-	if t.isYolo() {
-		return successResult(map[string]any{
-			"request_id": request.ID,
-			"dismissed":  true,
-			"reason":     "yolo_mode",
-			"answers":    map[string]string{},
-		}), nil
 	}
 
 	timeout := t.resolveTimeout(input.TimeoutSeconds)

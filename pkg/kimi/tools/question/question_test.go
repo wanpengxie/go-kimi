@@ -80,6 +80,8 @@ func TestAskUserQuestionExecuteYoloDismissesImmediately(t *testing.T) {
 
 	hub := wire.NewHub(8)
 	tool := New(hub, hub, func() bool { return true })
+	observer := hub.Subscribe()
+	defer hub.Unsubscribe(observer)
 
 	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
 		"questions": []map[string]any{
@@ -102,6 +104,21 @@ func TestAskUserQuestionExecuteYoloDismissesImmediately(t *testing.T) {
 	}
 	if reason, _ := payload["reason"].(string); reason != "yolo_mode" {
 		t.Fatalf("payload.reason = %q, want %q", reason, "yolo_mode")
+	}
+	if requestID, _ := payload["request_id"].(string); strings.TrimSpace(requestID) == "" {
+		t.Fatal("payload.request_id is empty, want non-empty")
+	}
+
+	select {
+	case message, ok := <-observer:
+		if !ok {
+			t.Fatal("observer channel closed unexpectedly")
+		}
+		if _, isRequest := message.(wire.QuestionRequest); isRequest {
+			t.Fatalf("unexpected question request in yolo mode: %#v", message)
+		}
+		t.Fatalf("unexpected wire message in yolo mode: %T", message)
+	case <-time.After(150 * time.Millisecond):
 	}
 }
 
