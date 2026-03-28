@@ -11,6 +11,30 @@ import (
 func TestNewProvider(t *testing.T) {
 	t.Parallel()
 
+	t.Run("registered constructor", func(t *testing.T) {
+		t.Parallel()
+
+		const customType ProviderType = "custom_test_provider"
+		RegisterProviderConstructor(customType, func(cfg ProviderConfig) (ChatProvider, error) {
+			return NewEchoChatProvider(cfg.Model), nil
+		})
+
+		provider, err := NewProvider(ProviderConfig{
+			Type:  " CUSTOM_TEST_PROVIDER ",
+			Model: "custom-echo-model",
+		})
+		if err != nil {
+			t.Fatalf("NewProvider(custom) error = %v", err)
+		}
+		typed, ok := provider.(*EchoChatProvider)
+		if !ok {
+			t.Fatalf("provider type = %T, want *EchoChatProvider", provider)
+		}
+		if typed.ModelName() != "custom-echo-model" {
+			t.Fatalf("ModelName() = %q, want %q", typed.ModelName(), "custom-echo-model")
+		}
+	})
+
 	t.Run("moonshot aliases are recognized but not implemented", func(t *testing.T) {
 		t.Parallel()
 

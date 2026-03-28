@@ -67,6 +67,48 @@ func TestMoonshotClientWithModelClonesProvider(t *testing.T) {
 	}
 }
 
+func TestMoonshotFactoryRegistration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		typ  string
+	}{
+		{name: "moonshot", typ: "moonshot"},
+		{name: "kimi alias", typ: "kimi"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			provider, err := llm.NewProvider(llm.ProviderConfig{
+				Type:    tc.typ,
+				APIKey:  "test-key",
+				BaseURL: "https://example.com/v1",
+				Model:   "kimi-k2",
+			})
+			if err != nil {
+				t.Fatalf("NewProvider(%q) error = %v", tc.typ, err)
+			}
+			typed, ok := provider.(*MoonshotClient)
+			if !ok {
+				t.Fatalf("provider type = %T, want *MoonshotClient", provider)
+			}
+			if typed.apiKey != "test-key" {
+				t.Fatalf("apiKey = %q, want %q", typed.apiKey, "test-key")
+			}
+			if typed.baseURL != "https://example.com/v1" {
+				t.Fatalf("baseURL = %q, want %q", typed.baseURL, "https://example.com/v1")
+			}
+			if typed.model != "kimi-k2" {
+				t.Fatalf("model = %q, want %q", typed.model, "kimi-k2")
+			}
+		})
+	}
+}
+
 func TestMoonshotClientChat(t *testing.T) {
 	t.Parallel()
 
