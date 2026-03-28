@@ -47,6 +47,12 @@ type Request struct {
 	Params  any    `json:"params,omitempty"`
 }
 
+type notificationRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
 // Response is one JSON-RPC 2.0 response message.
 type Response struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -188,6 +194,52 @@ func (t *StdioTransport) Send(ctx context.Context, method string, params any) (j
 		}
 		return cloneRawMessage(result.response.Result), nil
 	}
+}
+
+// Notify sends one JSON-RPC notification without waiting for a response.
+func (t *StdioTransport) Notify(ctx context.Context, method string, params any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if t == nil {
+		return errors.New("mcp stdio transport: nil transport")
+	}
+
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return errors.New("mcp stdio transport: method is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("mcp stdio transport: notify: %w", err)
+	}
+
+	payload, err := json.Marshal(notificationRequest{
+		JSONRPC: jsonRPCVersion,
+		Method:  method,
+		Params:  params,
+	})
+	if err != nil {
+		return fmt.Errorf("mcp stdio transport: marshal notification: %w", err)
+	}
+
+	t.mu.Lock()
+	closed := t.closed
+	readErr := t.readErr
+	t.mu.Unlock()
+	if closed {
+		return errors.New("mcp stdio transport: closed")
+	}
+	if readErr != nil {
+		return t.withStderr(readErr)
+	}
+
+	t.writeMu.Lock()
+	_, err = t.stdin.Write(append(payload, '\n'))
+	t.writeMu.Unlock()
+	if err != nil {
+		return t.withStderr(fmt.Errorf("mcp stdio transport: write notification: %w", err))
+	}
+	return nil
 }
 
 // Close gracefully terminates the child process.
@@ -457,6 +509,64 @@ func (t *SSETransport) Send(ctx context.Context, method string, params any) (jso
 		return nil, rpcResp.Error
 	}
 	return cloneRawMessage(rpcResp.Result), nil
+}
+
+// Notify sends one JSON-RPC notification over HTTP POST.
+func (t *SSETransport) Notify(ctx context.Context, method string, params any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if t == nil {
+		return errors.New("mcp sse transport: nil transport")
+	}
+
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return errors.New("mcp sse transport: method is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("mcp sse transport: notify: %w", err)
+	}
+
+	payload, err := json.Marshal(notificationRequest{
+		JSONRPC: jsonRPCVersion,
+		Method:  method,
+		Params:  params,
+	})
+	if err != nil {
+		return fmt.Errorf("mcp sse transport: marshal notification: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("mcp sse transport: build notification request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	for key, value := range t.headers {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		httpReq.Header.Set(key, value)
+	}
+
+	resp, err := t.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("mcp sse transport: send notification: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := strings.TrimSpace(readAllString(resp.Body))
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		return fmt.Errorf("mcp sse transport: notification status %d: %s", resp.StatusCode, message)
+	}
+	return nil
 }
 
 // Close closes idle HTTP connections.
