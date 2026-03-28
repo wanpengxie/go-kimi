@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
 const (
@@ -47,6 +48,9 @@ type EnterPlanMode struct {
 	WorkDir string
 	State   *PlanState
 
+	QuestionFlow QuestionFlow
+	Syncer       ModeSyncer
+
 	slugGenerator func() (string, error)
 }
 
@@ -60,6 +64,24 @@ func NewEnterPlanMode(workDir string, state *PlanState) *EnterPlanMode {
 		State:         state,
 		slugGenerator: randomThreeWordSlug,
 	}
+}
+
+// ConfigureQuestionFlow enables interactive enter-plan confirmation flow.
+func (t *EnterPlanMode) ConfigureQuestionFlow(flow QuestionFlow) *EnterPlanMode {
+	if t == nil {
+		return t
+	}
+	t.QuestionFlow = flow
+	return t
+}
+
+// SetModeSyncer sets one optional plan mode runtime sync hook.
+func (t *EnterPlanMode) SetModeSyncer(syncer ModeSyncer) *EnterPlanMode {
+	if t == nil {
+		return t
+	}
+	t.Syncer = syncer
+	return t
 }
 
 // Name returns the tool name.
@@ -102,15 +124,42 @@ func (t *EnterPlanMode) Execute(ctx context.Context, params json.RawMessage) (ty
 		return types.ToolResult{}, err
 	}
 
+	confirmed, requestID, reason, err := t.confirmEnter(ctx)
+	if err != nil {
+		return buildResult(enterToolName, fmt.Sprintf("enter_plan_mode: %v", err), true), nil
+	}
+	if !confirmed {
+		payload := map[string]any{
+			"active":    false,
+			"confirmed": false,
+		}
+		if requestID != "" {
+			payload["request_id"] = requestID
+		}
+		if reason != "" {
+			payload["reason"] = reason
+		}
+		return buildResult(enterToolName, payload, false), nil
+	}
+
 	planFile := filepath.Join(workDir, ".kimi", "plans", slug+".md")
 	if err := state.Enter(planFile); err != nil {
 		return types.ToolResult{}, fmt.Errorf("enter_plan_mode: %w", err)
 	}
+	if t != nil && t.Syncer != nil {
+		t.Syncer.OnPlanModeEnter(planFile, slug)
+	}
 
-	return buildResult(enterToolName, map[string]any{
+	payload := map[string]any{
 		"plan_file": planFile,
+		"slug":      slug,
 		"active":    true,
-	}, false), nil
+		"confirmed": true,
+	}
+	if requestID != "" {
+		payload["request_id"] = requestID
+	}
+	return buildResult(enterToolName, payload, false), nil
 }
 
 func (t *EnterPlanMode) planState() *PlanState {
@@ -184,4 +233,51 @@ func randomWord(pool []string) (string, error) {
 		return "", fmt.Errorf("enter_plan_mode: generate random slug word: %w", err)
 	}
 	return pool[n.Int64()], nil
+}
+
+func (t *EnterPlanMode) confirmEnter(ctx context.Context) (bool, string, string, error) {
+	if t == nil {
+		return true, "", "", nil
+	}
+	if !t.QuestionFlow.enabled() {
+		return true, "", "", nil
+	}
+	if t.QuestionFlow.isYolo() {
+		return true, "", "yolo_mode", nil
+	}
+
+	outcome, err := t.QuestionFlow.askSingleChoice(
+		ctx,
+		"enter-plan",
+		"Enter plan mode and create a plan file before implementation?",
+		wire.QuestionItem{
+			Header:   "Plan Mode",
+			ID:       "decision",
+			Question: "Proceed to enter plan mode?",
+			Options: []wire.QuestionOption{
+				{
+					Label:       "Enter plan mode",
+					Description: "Continue with planning-only workflow",
+					Value:       "enter",
+				},
+				{
+					Label:       "Not now",
+					Description: "Keep current non-plan workflow",
+					Value:       "cancel",
+				},
+			},
+		},
+	)
+	if err != nil {
+		return false, "", "", err
+	}
+
+	switch outcome.Answer {
+	case "enter", "confirm", "yes", "true", "approve":
+		return true, outcome.RequestID, "", nil
+	case "", "cancel", "decline", "no", "false", "reject":
+		return false, outcome.RequestID, "user_declined", nil
+	default:
+		return false, outcome.RequestID, "user_declined", nil
+	}
 }

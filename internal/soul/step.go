@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"text/template"
@@ -144,6 +146,9 @@ func (s *Soul) executeOneTool(ctx context.Context, call types.ToolCall) types.To
 }
 
 func (s *Soul) requestToolApproval(ctx context.Context, call types.ToolCall) (bool, string) {
+	if s.shouldAutoApproveTool(call) {
+		return true, ""
+	}
 	if s.approval == nil {
 		return true, ""
 	}
@@ -390,6 +395,117 @@ func toolApprovalDescription(call types.ToolCall) string {
 	}
 
 	return fmt.Sprintf("tool=%s args=%s", call.Name, argumentSummary)
+}
+
+func (s *Soul) shouldAutoApproveTool(call types.ToolCall) bool {
+	name := strings.TrimSpace(call.Name)
+	if name != "write_file" && name != "str_replace" {
+		return false
+	}
+
+	pathArg := toolCallPathArgument(call.Arguments)
+	if pathArg == "" {
+		return false
+	}
+
+	var (
+		planMode PlanModeState
+		workDir  string
+	)
+	if s != nil {
+		s.stateMu.RLock()
+		planMode = s.planMode
+		workDir = strings.TrimSpace(s.templateData.WorkDir)
+		s.stateMu.RUnlock()
+	}
+	if !planMode.Active {
+		return false
+	}
+
+	planFile := strings.TrimSpace(planMode.PlanFile)
+	if planFile == "" {
+		return false
+	}
+
+	normalizedPlan := normalizeApprovalPath(workDir, planFile)
+	normalizedCall := normalizeApprovalPath(workDir, pathArg)
+	if normalizedPlan == "" || normalizedCall == "" {
+		return false
+	}
+	return normalizedPlan == normalizedCall
+}
+
+func toolCallPathArgument(arguments types.JsonType) string {
+	decoded := decodeToolArgumentMap(arguments)
+	if len(decoded) == 0 {
+		return ""
+	}
+	value, ok := decoded["path"]
+	if !ok {
+		return ""
+	}
+	path, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(path)
+}
+
+func decodeToolArgumentMap(arguments types.JsonType) map[string]any {
+	if arguments == nil {
+		return nil
+	}
+
+	switch typed := arguments.(type) {
+	case map[string]any:
+		return typed
+	case string:
+		decoded := map[string]any{}
+		if err := json.Unmarshal([]byte(typed), &decoded); err == nil {
+			return decoded
+		}
+		return nil
+	case json.RawMessage:
+		decoded := map[string]any{}
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			return decoded
+		}
+		return nil
+	default:
+		raw, err := json.Marshal(arguments)
+		if err != nil {
+			return nil
+		}
+		decoded := map[string]any{}
+		if err := json.Unmarshal(raw, &decoded); err == nil {
+			return decoded
+		}
+		return nil
+	}
+}
+
+func normalizeApprovalPath(workDir string, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workDir = cwd
+		}
+	}
+
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	return filepath.Clean(absPath)
 }
 
 func cloneContentParts(parts types.ContentParts) types.ContentParts {

@@ -3,6 +3,7 @@ package soul
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -1095,6 +1096,78 @@ func TestSoulStepApprovalRejectSkipsExecutor(t *testing.T) {
 	}
 	if _, ok := events[2].(wire.ToolCallResult); !ok {
 		t.Fatalf("event[2] = %T, want wire.ToolCallResult", events[2])
+	}
+}
+
+func TestSoulStepPlanModeAutoApprovesPlanFileMutation(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	planFile := filepath.Join(t.TempDir(), "plan.md")
+
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{
+					ID:   "call-1",
+					Name: "write_file",
+					Arguments: map[string]any{
+						"path":    planFile,
+						"content": "# plan",
+					},
+				}},
+				{Done: true},
+			},
+		},
+	}
+
+	executed := false
+	registry := mockRegistry{
+		executors: map[string]ToolExecutor{
+			"write_file": executorFunc(func(_ context.Context, call types.ToolCall) (types.ToolResult, error) {
+				executed = true
+				return types.ToolResult{
+					ToolCallID: call.ID,
+					Name:       call.Name,
+					Value: types.ToolReturnValue{
+						Value: "ok",
+					},
+				}, nil
+			}),
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	s := NewSoul(provider, ctxStore, registry, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.SetYolo(false)
+	s.SetPlanModeState(PlanModeState{
+		Active:   true,
+		PlanFile: planFile,
+	})
+
+	result, err := s.step(context.Background(), "turn-plan-auto-approve")
+	if err != nil {
+		t.Fatalf("step() error = %v", err)
+	}
+	if len(result.ToolResults) != 1 {
+		t.Fatalf("len(result.ToolResults) = %d, want 1", len(result.ToolResults))
+	}
+	if result.ToolResults[0].IsError {
+		t.Fatalf("ToolResult.IsError = %v, want false", result.ToolResults[0].IsError)
+	}
+	if !executed {
+		t.Fatalf("tool executor executed = false, want true")
+	}
+
+	events := drainWireMessages(wireCh)
+	if len(events) != 2 {
+		t.Fatalf("wire event count = %d, want 2", len(events))
+	}
+	if _, ok := events[0].(wire.ToolCallRequest); !ok {
+		t.Fatalf("event[0] = %T, want wire.ToolCallRequest", events[0])
+	}
+	if _, ok := events[1].(wire.ToolCallResult); !ok {
+		t.Fatalf("event[1] = %T, want wire.ToolCallResult", events[1])
 	}
 }
 

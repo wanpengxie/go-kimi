@@ -27,6 +27,7 @@ import (
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 	agenttool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/agent"
 	bgtools "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/background"
+	dmailtool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/dmail"
 	toolfile "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/file"
 	plantool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/plan"
 	questiontool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/question"
@@ -119,6 +120,11 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		return nil, err
 	}
 
+	ctxStore := soul.NewSoulContext(sess.Dir)
+	if err := ctxStore.Restore(); err != nil {
+		return nil, fmt.Errorf("kimi: restore session context: %w", err)
+	}
+
 	provider, effectiveModel, err := resolveProvider(runtimeConfig, resolvedSpec, cfg)
 	if err != nil {
 		return nil, err
@@ -129,12 +135,44 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	}
 
 	planState := plantool.NewPlanState()
+	planFile := ""
+	planMode := soul.PlanModeState{}
+	if sess.State != nil {
+		sess.State.Yolo = yolo
+
+		planSlug := strings.TrimSpace(sess.State.PlanSlug)
+		planFile = planFilePath(workDir, planSlug)
+		if sess.State.PlanMode && planFile != "" {
+			_ = planState.Enter(planFile)
+		}
+		planMode = soul.PlanModeState{
+			Active:    planState.IsActive(),
+			SessionID: strings.TrimSpace(sess.State.PlanSessionID),
+			Slug:      planSlug,
+			PlanFile:  planFile,
+		}
+		if planMode.SessionID == "" {
+			planMode.SessionID = strings.TrimSpace(sess.ID)
+		}
+		sess.State.PlanMode = planMode.Active
+		sess.State.PlanSessionID = planMode.SessionID
+		sess.State.PlanSlug = planMode.Slug
+		if err := sess.SaveState(); err != nil {
+			return nil, fmt.Errorf("kimi: persist session state: %w", err)
+		}
+	}
+
+	modelCapabilities := resolveModelCapabilities(runtimeConfig, effectiveModel, provider)
+	supportsVision := modelCapabilities[types.ModelCapabilityVision]
+	supportsVideo := modelCapabilities[types.ModelCapabilityVideoInput]
+
 	toolRegistry := tools.NewMapToolRegistry()
 
 	wireHub := wire.NewHub(64)
 	wireMerger := wire.NewMergingSubscriber(wireHub, 128)
 	wireRecorder := wire.NewRecorder(wire.NewWireFile(sess.WireFile), wireMerger.Messages())
 	wireEmitter := composeEmitters(cfg.WireEmitter, wireHub)
+	planSyncer := newPlanModeSyncer(sess, planMode)
 
 	market := newLaborMarket(resolvedSpec, effectiveModel)
 	subagentStore := subagents.NewSubagentStore(sess.SubagentsDir())
@@ -168,6 +206,10 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		wireHub,
 		wireEmitter,
 		func() bool { return yolo },
+		supportsVision,
+		supportsVideo,
+		ctxStore,
+		planSyncer,
 	)
 	candidates = append(candidates, mcpTools...)
 	candidates = append(candidates, cfg.AdditionalTools...)
@@ -183,35 +225,12 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		toolRegistry.Register(selectedTools[i])
 	}
 
-	ctxStore := soul.NewSoulContext(sess.Dir)
-	if err := ctxStore.Restore(); err != nil {
-		if mcpLoader != nil {
-			_ = mcpLoader.Close()
-		}
-		return nil, fmt.Errorf("kimi: restore session context: %w", err)
-	}
-
 	engine := soul.NewSoul(provider, ctxStore, toolRegistry, wireEmitter, resolvedSpec.SystemPrompt)
 	engine.SetMaxSteps(runtimeConfig.Loop.MaxTurns)
 	engine.SetStepRetryConfig(soul.StepRetryConfig{MaxRetries: runtimeConfig.Loop.MaxRetriesPerStep})
 
 	engine.SetYolo(yolo)
-
-	planMode := soul.PlanModeState{}
-	if sess.State != nil {
-		planMode = soul.PlanModeState{
-			Active:    sess.State.PlanMode,
-			SessionID: sess.State.PlanSessionID,
-			Slug:      sess.State.PlanSlug,
-		}
-		sess.State.Yolo = yolo
-		if err := sess.SaveState(); err != nil {
-			if mcpLoader != nil {
-				_ = mcpLoader.Close()
-			}
-			return nil, fmt.Errorf("kimi: persist session state: %w", err)
-		}
-	}
+	planSyncer.AttachEngine(engine)
 	engine.SetPlanModeState(planMode)
 
 	approval := cfg.ApprovalRuntime
@@ -487,18 +506,39 @@ func buildToolCandidates(
 	questionHub *wire.Hub,
 	questionPublisher wire.Emitter,
 	yoloChecker questiontool.YoloChecker,
+	supportsVision bool,
+	supportsVideo bool,
+	dmailContext dmailtool.MailContext,
+	planSyncer plantool.ModeSyncer,
 ) []tools.Tool {
+	enterPlan := plantool.NewEnterPlanMode(workDir, planState).
+		ConfigureQuestionFlow(plantool.QuestionFlow{
+			Hub:       questionHub,
+			Publisher: questionPublisher,
+			IsYolo:    plantool.YoloChecker(yoloChecker),
+		}).
+		SetModeSyncer(planSyncer)
+	exitPlan := plantool.NewExitPlanMode(planState).
+		ConfigureQuestionFlow(plantool.QuestionFlow{
+			Hub:       questionHub,
+			Publisher: questionPublisher,
+			IsYolo:    plantool.YoloChecker(yoloChecker),
+		}).
+		SetModeSyncer(planSyncer)
+
 	candidates := []tools.Tool{
 		think.New(),
 		shell.NewWithBackground(workDir, nil, backgroundManager, sessionID),
 		toolfile.NewReadFile(workDir),
+		toolfile.NewReadMediaFile(workDir, supportsVision, supportsVideo),
 		toolfile.NewWriteFile(workDir, nil),
 		toolfile.NewStrReplace(workDir, nil),
 		toolfile.NewGrep(workDir),
 		toolfile.NewGlob(workDir),
 		questiontool.New(questionHub, questionPublisher, yoloChecker),
-		plantool.NewEnterPlanMode(workDir, planState),
-		plantool.NewExitPlanMode(planState),
+		enterPlan,
+		exitPlan,
+		dmailtool.New(dmailContext),
 		agenttool.New(foregroundRunner, backgroundManager),
 		bgtools.NewTaskList(backgroundManager),
 		bgtools.NewTaskOutput(backgroundManager),
@@ -635,6 +675,113 @@ func newLaborMarket(spec *agentspec.ResolvedSpec, defaultModel string) *subagent
 		})
 	}
 	return market
+}
+
+func resolveModelCapabilities(cfg config.Config, effectiveModel string, provider llm.ChatProvider) map[types.ModelCapability]bool {
+	if model, ok := findModel(cfg.Models, effectiveModel); ok {
+		return llm.DeriveModelCapabilities(model)
+	}
+
+	modelName := strings.TrimSpace(effectiveModel)
+	if modelName == "" && provider != nil {
+		modelName = strings.TrimSpace(provider.ModelName())
+	}
+	return llm.DeriveModelCapabilities(config.LLMModel{Name: modelName})
+}
+
+func planFilePath(workDir string, slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return ""
+	}
+	return filepath.Join(workDir, ".kimi", "plans", slug+".md")
+}
+
+type planModeSyncer struct {
+	mu      sync.Mutex
+	session *session.Session
+	engine  *soul.Soul
+	state   soul.PlanModeState
+}
+
+func newPlanModeSyncer(sess *session.Session, initial soul.PlanModeState) *planModeSyncer {
+	return &planModeSyncer{
+		session: sess,
+		state:   initial,
+	}
+}
+
+func (s *planModeSyncer) AttachEngine(engine *soul.Soul) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.engine = engine
+	state := s.state
+	s.mu.Unlock()
+	if engine != nil {
+		engine.SetPlanModeState(state)
+	}
+}
+
+func (s *planModeSyncer) OnPlanModeEnter(planFile string, slug string) {
+	if s == nil {
+		return
+	}
+	planFile = strings.TrimSpace(planFile)
+	slug = strings.TrimSpace(slug)
+	if slug == "" && planFile != "" {
+		base := filepath.Base(planFile)
+		slug = strings.TrimSpace(strings.TrimSuffix(base, filepath.Ext(base)))
+	}
+
+	s.mu.Lock()
+	state := s.state
+	state.Active = true
+	state.PlanFile = planFile
+	if slug != "" {
+		state.Slug = slug
+	}
+	if state.SessionID == "" && s.session != nil {
+		state.SessionID = strings.TrimSpace(s.session.ID)
+	}
+	s.state = state
+	engine := s.engine
+	sess := s.session
+	s.mu.Unlock()
+
+	applyPlanModeState(sess, engine, state)
+}
+
+func (s *planModeSyncer) OnPlanModeExit() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	state := s.state
+	state.Active = false
+	state.PlanFile = ""
+	s.state = state
+	engine := s.engine
+	sess := s.session
+	s.mu.Unlock()
+
+	applyPlanModeState(sess, engine, state)
+}
+
+func applyPlanModeState(sess *session.Session, engine *soul.Soul, state soul.PlanModeState) {
+	if sess != nil {
+		if sess.State == nil {
+			sess.State = session.NewSessionState()
+		}
+		sess.State.PlanMode = state.Active
+		sess.State.PlanSessionID = strings.TrimSpace(state.SessionID)
+		sess.State.PlanSlug = strings.TrimSpace(state.Slug)
+		_ = sess.SaveState()
+	}
+	if engine != nil {
+		engine.SetPlanModeState(state)
+	}
 }
 
 func classifyRunError(err error, provider llm.ChatProvider) error {

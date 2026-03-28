@@ -2,6 +2,7 @@ package file
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
+
+const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5N2ioAAAAASUVORK5CYII="
 
 func TestReadFileExecuteSuccessWithLineRange(t *testing.T) {
 	t.Parallel()
@@ -510,6 +513,107 @@ func TestStrReplaceExecuteApprovalRejected(t *testing.T) {
 	}
 }
 
+func TestReadMediaFileExecuteImageSuccess(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	imageBytes, err := base64.StdEncoding.DecodeString(tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("DecodeString(tinyPNGBase64) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "tiny.png"), imageBytes, 0o644); err != nil {
+		t.Fatalf("os.WriteFile(tiny.png) error = %v", err)
+	}
+
+	tool := NewReadMediaFile(workDir, true, false)
+	result, execErr := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path": "tiny.png",
+	}))
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+
+	payload := resultPayloadMap(t, result)
+	if got, _ := payload["media_type"].(string); got != "image/png" {
+		t.Fatalf("payload.media_type = %q, want %q", got, "image/png")
+	}
+
+	parts, ok := payload["content_parts"].(types.ContentParts)
+	if !ok {
+		t.Fatalf("payload.content_parts type = %T, want types.ContentParts", payload["content_parts"])
+	}
+	if len(parts) != 1 {
+		t.Fatalf("len(content_parts) = %d, want 1", len(parts))
+	}
+	imagePart, ok := parts[0].(types.ImageURLPart)
+	if !ok {
+		t.Fatalf("content_parts[0] type = %T, want types.ImageURLPart", parts[0])
+	}
+	if !strings.HasPrefix(imagePart.ImageURL, "data:image/png;base64,") {
+		t.Fatalf("image data url prefix = %q, want data:image/png;base64,...", imagePart.ImageURL)
+	}
+}
+
+func TestReadMediaFileExecuteSkipsWithoutCapability(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	imageBytes, err := base64.StdEncoding.DecodeString(tinyPNGBase64)
+	if err != nil {
+		t.Fatalf("DecodeString(tinyPNGBase64) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "tiny.png"), imageBytes, 0o644); err != nil {
+		t.Fatalf("os.WriteFile(tiny.png) error = %v", err)
+	}
+
+	tool := NewReadMediaFile(workDir, false, false)
+	result, execErr := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path": "tiny.png",
+	}))
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+
+	payload := resultPayloadMap(t, result)
+	if skipped, _ := payload["skipped"].(bool); !skipped {
+		t.Fatalf("payload.skipped = %#v, want true", payload["skipped"])
+	}
+	if reason, _ := payload["reason"].(string); !strings.Contains(reason, "vision") {
+		t.Fatalf("payload.reason = %q, want contains vision", reason)
+	}
+}
+
+func TestReadMediaFileExecuteRejectsOversizedFile(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "large.bin")
+	if err := os.WriteFile(target, []byte(strings.Repeat("x", 64)), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(large.bin) error = %v", err)
+	}
+
+	tool := NewReadMediaFile(workDir, true, true)
+	tool.MaxBytes = 16
+	result, execErr := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path": "large.bin",
+	}))
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if !strings.Contains(resultOutputText(t, result), "larger than") {
+		t.Fatalf("result output = %q, want contains larger than", resultOutputText(t, result))
+	}
+}
+
 func mustParams(t *testing.T, input any) json.RawMessage {
 	t.Helper()
 	encoded, err := json.Marshal(input)
@@ -526,4 +630,13 @@ func resultOutputText(t *testing.T, result types.ToolResult) string {
 		t.Fatalf("result output type = %T, want string", result.Value.Value)
 	}
 	return output
+}
+
+func resultPayloadMap(t *testing.T, result types.ToolResult) map[string]any {
+	t.Helper()
+	payload, ok := result.Value.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result payload type = %T, want map[string]any", result.Value.Value)
+	}
+	return payload
 }

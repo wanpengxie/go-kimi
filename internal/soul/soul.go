@@ -62,6 +62,7 @@ type PlanModeState struct {
 	Active    bool
 	SessionID string
 	Slug      string
+	PlanFile  string
 }
 
 // SystemPromptTemplateData exposes variables used by system prompt templates.
@@ -274,6 +275,7 @@ func (s *Soul) SetPlanModeState(state PlanModeState) {
 	}
 	state.SessionID = strings.TrimSpace(state.SessionID)
 	state.Slug = strings.TrimSpace(state.Slug)
+	state.PlanFile = strings.TrimSpace(state.PlanFile)
 	s.stateMu.Lock()
 	s.planMode = state
 	s.stateMu.Unlock()

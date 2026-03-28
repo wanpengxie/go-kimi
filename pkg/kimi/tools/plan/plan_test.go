@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
 func TestPlanStateLifecycle(t *testing.T) {
@@ -258,6 +260,120 @@ func TestExitPlanModeExecuteTruncatesLongPlanContent(t *testing.T) {
 	}
 }
 
+func TestEnterPlanModeExecuteQuestionConfirmationDeclined(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	state := NewPlanState()
+	hub := wire.NewHub(16)
+	tool := NewEnterPlanMode(workDir, state).
+		ConfigureQuestionFlow(QuestionFlow{
+			Hub:       hub,
+			Publisher: hub,
+		})
+	tool.slugGenerator = func() (string, error) {
+		return "steady-harbor-plan", nil
+	}
+	observer := hub.Subscribe()
+	defer hub.Unsubscribe(observer)
+
+	type executeResult struct {
+		result types.ToolResult
+		err    error
+	}
+	resultCh := make(chan executeResult, 1)
+	go func() {
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		resultCh <- executeResult{result: result, err: err}
+	}()
+
+	request := mustReadQuestionRequest(t, observer)
+	hub.Publish(wire.QuestionResponse{
+		RequestID: request.ID,
+		Answers: map[string]string{
+			"decision": "cancel",
+		},
+	})
+
+	outcome := <-resultCh
+	if outcome.err != nil {
+		t.Fatalf("Execute() error = %v", outcome.err)
+	}
+	if outcome.result.IsError {
+		t.Fatalf("result.IsError = %v, want false", outcome.result.IsError)
+	}
+	payload := resultPayloadMap(t, outcome.result)
+	if active, _ := payload["active"].(bool); active {
+		t.Fatalf("payload.active = %v, want false", active)
+	}
+	if confirmed, _ := payload["confirmed"].(bool); confirmed {
+		t.Fatalf("payload.confirmed = %v, want false", confirmed)
+	}
+	if state.IsActive() {
+		t.Fatal("state.IsActive() = true, want false")
+	}
+}
+
+func TestExitPlanModeExecuteInteractiveDecision(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	planFile := filepath.Join(workDir, "plan.md")
+	const content = "# Plan\n- item\n"
+	if err := os.WriteFile(planFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(%q) error = %v", planFile, err)
+	}
+
+	state := NewPlanState()
+	if err := state.Enter(planFile); err != nil {
+		t.Fatalf("state.Enter() error = %v", err)
+	}
+	hub := wire.NewHub(16)
+	tool := NewExitPlanMode(state).
+		ConfigureQuestionFlow(QuestionFlow{
+			Hub:       hub,
+			Publisher: hub,
+		})
+	observer := hub.Subscribe()
+	defer hub.Unsubscribe(observer)
+
+	type executeResult struct {
+		result types.ToolResult
+		err    error
+	}
+	resultCh := make(chan executeResult, 1)
+	go func() {
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+		resultCh <- executeResult{result: result, err: err}
+	}()
+
+	request := mustReadQuestionRequest(t, observer)
+	hub.Publish(wire.QuestionResponse{
+		RequestID: request.ID,
+		Answers: map[string]string{
+			"decision": "revise",
+		},
+	})
+
+	outcome := <-resultCh
+	if outcome.err != nil {
+		t.Fatalf("Execute() error = %v", outcome.err)
+	}
+	if outcome.result.IsError {
+		t.Fatalf("result.IsError = %v, want false", outcome.result.IsError)
+	}
+	payload := resultPayloadMap(t, outcome.result)
+	if got, _ := payload["decision"].(string); got != decisionRevise {
+		t.Fatalf("payload.decision = %q, want %q", got, decisionRevise)
+	}
+	if got, _ := payload["plan_content"].(string); got != content {
+		t.Fatalf("payload.plan_content = %q, want %q", got, content)
+	}
+	if state.IsActive() {
+		t.Fatal("state.IsActive() after exit = true, want false")
+	}
+}
+
 func mustParams(t *testing.T, input any) json.RawMessage {
 	t.Helper()
 	encoded, err := json.Marshal(input)
@@ -274,4 +390,25 @@ func resultPayloadMap(t *testing.T, result types.ToolResult) map[string]any {
 		t.Fatalf("result.Value.Value type = %T, want map[string]any", result.Value.Value)
 	}
 	return payload
+}
+
+func mustReadQuestionRequest(t *testing.T, ch <-chan wire.WireMessage) wire.QuestionRequest {
+	t.Helper()
+
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting question request")
+		case message, ok := <-ch:
+			if !ok {
+				t.Fatal("question observer channel closed unexpectedly")
+			}
+			request, ok := message.(wire.QuestionRequest)
+			if !ok {
+				continue
+			}
+			return request
+		}
+	}
 }

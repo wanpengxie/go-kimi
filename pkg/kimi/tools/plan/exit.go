@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
 )
 
 const (
@@ -34,7 +35,6 @@ var exitParameterSchema = json.RawMessage(`{
       "description": "Optional decision feedback"
     }
   },
-  "required": ["decision"],
   "additionalProperties": false
 }`)
 
@@ -45,7 +45,9 @@ type exitParams struct {
 
 // ExitPlanMode implements the exit_plan_mode tool.
 type ExitPlanMode struct {
-	State *PlanState
+	State        *PlanState
+	QuestionFlow QuestionFlow
+	Syncer       ModeSyncer
 }
 
 // NewExitPlanMode creates one exit_plan_mode tool.
@@ -54,6 +56,24 @@ func NewExitPlanMode(state *PlanState) *ExitPlanMode {
 		state = NewPlanState()
 	}
 	return &ExitPlanMode{State: state}
+}
+
+// ConfigureQuestionFlow enables interactive plan-review decision flow.
+func (t *ExitPlanMode) ConfigureQuestionFlow(flow QuestionFlow) *ExitPlanMode {
+	if t == nil {
+		return t
+	}
+	t.QuestionFlow = flow
+	return t
+}
+
+// SetModeSyncer sets one optional plan mode runtime sync hook.
+func (t *ExitPlanMode) SetModeSyncer(syncer ModeSyncer) *ExitPlanMode {
+	if t == nil {
+		return t
+	}
+	t.Syncer = syncer
+	return t
 }
 
 // Name returns the tool name.
@@ -83,15 +103,42 @@ func (t *ExitPlanMode) Execute(ctx context.Context, params json.RawMessage) (typ
 		return types.ToolResult{}, errors.New("exit_plan_mode: state is unavailable")
 	}
 
+	decision := input.Decision
+	requestID := ""
+	if decision == "" {
+		resolvedDecision, resolvedRequestID, dismissed, resolveErr := t.resolveDecision(ctx)
+		if resolveErr != nil {
+			return buildResult(exitToolName, fmt.Sprintf("exit_plan_mode: %v", resolveErr), true), nil
+		}
+		if dismissed {
+			payload := map[string]any{
+				"active":    true,
+				"dismissed": true,
+			}
+			if resolvedRequestID != "" {
+				payload["request_id"] = resolvedRequestID
+			}
+			return buildResult(exitToolName, payload, false), nil
+		}
+		decision = resolvedDecision
+		requestID = resolvedRequestID
+	}
+
 	planContent, err := state.Exit()
 	if err != nil {
 		return types.ToolResult{}, fmt.Errorf("exit_plan_mode: %w", err)
 	}
+	if t != nil && t.Syncer != nil {
+		t.Syncer.OnPlanModeExit()
+	}
 
 	payload := map[string]any{
-		"decision":     input.Decision,
+		"decision":     decision,
 		"plan_content": limitOutput(planContent),
 		"active":       false,
+	}
+	if requestID != "" {
+		payload["request_id"] = requestID
 	}
 	if input.Feedback != "" {
 		payload["feedback"] = input.Feedback
@@ -121,12 +168,72 @@ func decodeExitParams(raw json.RawMessage) (exitParams, error) {
 
 	input.Decision = strings.ToLower(strings.TrimSpace(input.Decision))
 	input.Feedback = strings.TrimSpace(input.Feedback)
+	if input.Decision == "" {
+		return input, nil
+	}
 	switch input.Decision {
 	case decisionApprove, decisionReject, decisionRevise:
 		return input, nil
-	case "":
-		return exitParams{}, errors.New("exit_plan_mode: decision is required")
 	default:
 		return exitParams{}, errors.New("exit_plan_mode: decision must be approve, reject, or revise")
+	}
+}
+
+func (t *ExitPlanMode) resolveDecision(ctx context.Context) (string, string, bool, error) {
+	if t != nil && t.QuestionFlow.isYolo() {
+		return decisionApprove, "", false, nil
+	}
+	if t == nil || !t.QuestionFlow.enabled() {
+		return "", "", false, errors.New("decision is required")
+	}
+
+	outcome, err := t.QuestionFlow.askSingleChoice(
+		ctx,
+		"exit-plan",
+		"Review plan and choose one decision.",
+		wire.QuestionItem{
+			Header:   "Plan Review",
+			ID:       "decision",
+			Question: "Select a review decision for this plan.",
+			Options: []wire.QuestionOption{
+				{
+					Label:       "Approve",
+					Description: "Accept this plan and exit plan mode",
+					Value:       decisionApprove,
+				},
+				{
+					Label:       "Revise",
+					Description: "Request revisions before implementation",
+					Value:       decisionRevise,
+				},
+				{
+					Label:       "Reject",
+					Description: "Reject this plan output",
+					Value:       decisionReject,
+				},
+			},
+		},
+	)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	decision := normalizeDecision(outcome.Answer)
+	if decision == "" {
+		return "", outcome.RequestID, true, nil
+	}
+	return decision, outcome.RequestID, false, nil
+}
+
+func normalizeDecision(answer string) string {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case decisionApprove, "yes", "true":
+		return decisionApprove
+	case decisionReject, "no", "false":
+		return decisionReject
+	case decisionRevise, "edit":
+		return decisionRevise
+	default:
+		return ""
 	}
 }
