@@ -412,7 +412,18 @@ func (w stderrBufferWriter) Write(p []byte) (int, error) {
 	}
 	w.transport.stderrMu.Lock()
 	defer w.transport.stderrMu.Unlock()
-	return w.transport.stderrBuf.Write(p)
+	n, err := w.transport.stderrBuf.Write(p)
+	if w.transport.stderrBuf.Len() > stderrTailLimit*2 {
+		data := w.transport.stderrBuf.Bytes()
+		keep := stderrTailLimit
+		if keep > len(data) {
+			keep = len(data)
+		}
+		tail := append([]byte(nil), data[len(data)-keep:]...)
+		w.transport.stderrBuf.Reset()
+		_, _ = w.transport.stderrBuf.Write(tail)
+	}
+	return n, err
 }
 
 // SSETransport sends JSON-RPC over HTTP POST and parses SSE responses.
@@ -421,6 +432,9 @@ type SSETransport struct {
 	headers    map[string]string
 	httpClient *http.Client
 	nextID     int64
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // NewSSETransport creates one HTTP/SSE transport.
@@ -450,6 +464,15 @@ func (t *SSETransport) Send(ctx context.Context, method string, params any) (jso
 	if method == "" {
 		return nil, errors.New("mcp sse transport: method is required")
 	}
+	t.mu.Lock()
+	closed := t.closed
+	endpoint := t.endpoint
+	headers := t.headers
+	httpClient := t.httpClient
+	t.mu.Unlock()
+	if closed {
+		return nil, errors.New("mcp sse transport: closed")
+	}
 
 	id := int(atomic.AddInt64(&t.nextID, 1))
 	request := Request{
@@ -463,13 +486,13 @@ func (t *SSETransport) Send(ctx context.Context, method string, params any) (jso
 		return nil, fmt.Errorf("mcp sse transport: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("mcp sse transport: build request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	for key, value := range t.headers {
+	for key, value := range headers {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			continue
@@ -477,7 +500,7 @@ func (t *SSETransport) Send(ctx context.Context, method string, params any) (jso
 		httpReq.Header.Set(key, value)
 	}
 
-	resp, err := t.httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("mcp sse transport: send request: %w", err)
 	}
@@ -527,6 +550,15 @@ func (t *SSETransport) Notify(ctx context.Context, method string, params any) er
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("mcp sse transport: notify: %w", err)
 	}
+	t.mu.Lock()
+	closed := t.closed
+	endpoint := t.endpoint
+	headers := t.headers
+	httpClient := t.httpClient
+	t.mu.Unlock()
+	if closed {
+		return errors.New("mcp sse transport: closed")
+	}
 
 	payload, err := json.Marshal(notificationRequest{
 		JSONRPC: jsonRPCVersion,
@@ -537,13 +569,13 @@ func (t *SSETransport) Notify(ctx context.Context, method string, params any) er
 		return fmt.Errorf("mcp sse transport: marshal notification: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, t.endpoint, bytes.NewReader(payload))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("mcp sse transport: build notification request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	for key, value := range t.headers {
+	for key, value := range headers {
 		key = strings.TrimSpace(key)
 		if key == "" {
 			continue
@@ -551,7 +583,7 @@ func (t *SSETransport) Notify(ctx context.Context, method string, params any) er
 		httpReq.Header.Set(key, value)
 	}
 
-	resp, err := t.httpClient.Do(httpReq)
+	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("mcp sse transport: send notification: %w", err)
 	}
@@ -571,10 +603,23 @@ func (t *SSETransport) Notify(ctx context.Context, method string, params any) er
 
 // Close closes idle HTTP connections.
 func (t *SSETransport) Close() error {
-	if t == nil || t.httpClient == nil || t.httpClient.Transport == nil {
+	if t == nil {
 		return nil
 	}
-	if closer, ok := t.httpClient.Transport.(interface{ CloseIdleConnections() }); ok {
+
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
+	httpClient := t.httpClient
+	t.mu.Unlock()
+
+	if httpClient == nil || httpClient.Transport == nil {
+		return nil
+	}
+	if closer, ok := httpClient.Transport.(interface{ CloseIdleConnections() }); ok {
 		closer.CloseIdleConnections()
 	}
 	return nil

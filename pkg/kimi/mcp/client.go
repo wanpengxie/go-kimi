@@ -228,6 +228,9 @@ func (c *MCPClient) Close() error {
 		return nil
 	}
 
+	c.initMu.Lock()
+	defer c.initMu.Unlock()
+
 	c.mu.Lock()
 	c.initialized = false
 	c.protocolVersion = ""

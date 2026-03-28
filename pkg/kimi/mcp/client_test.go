@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type mockSendResponse struct {
@@ -134,6 +135,66 @@ func (m *mockTransportWithNotify) notifyMethods() []string {
 		out[i] = m.notifyCalls[i].method
 	}
 	return out
+}
+
+type blockingInitializeTransport struct {
+	mu     sync.Mutex
+	closed bool
+
+	initStarted chan struct{}
+	allowInit   chan struct{}
+	closeCalled chan struct{}
+
+	initOnce  sync.Once
+	closeOnce sync.Once
+}
+
+func newBlockingInitializeTransport() *blockingInitializeTransport {
+	return &blockingInitializeTransport{
+		initStarted: make(chan struct{}),
+		allowInit:   make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+}
+
+func (t *blockingInitializeTransport) Send(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if strings.TrimSpace(method) != "initialize" {
+		return nil, fmt.Errorf("mock blocking transport: unexpected method %q", method)
+	}
+	t.initOnce.Do(func() {
+		close(t.initStarted)
+	})
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-t.allowInit:
+	}
+
+	t.mu.Lock()
+	closed := t.closed
+	t.mu.Unlock()
+	if closed {
+		return nil, errors.New("mock blocking transport: closed")
+	}
+	return json.RawMessage(`{"protocolVersion":"2026-03-26","capabilities":{},"serverInfo":{"name":"fs"}}`), nil
+}
+
+func (t *blockingInitializeTransport) Notify(ctx context.Context, method string, params any) error {
+	if strings.TrimSpace(method) != "notifications/initialized" {
+		return fmt.Errorf("mock blocking transport: unexpected notify %q", method)
+	}
+	return nil
+}
+
+func (t *blockingInitializeTransport) Close() error {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
+	t.closeOnce.Do(func() {
+		close(t.closeCalled)
+	})
+	return nil
 }
 
 func TestMCPClientInitializeSuccess(t *testing.T) {
@@ -448,6 +509,61 @@ func TestMCPClientClose(t *testing.T) {
 	}
 	if _, err := client.ListTools(context.Background()); err == nil {
 		t.Fatal("ListTools() after Close expected initialize-required error")
+	}
+}
+
+func TestMCPClientCloseWaitsForInitialize(t *testing.T) {
+	t.Parallel()
+
+	transport := newBlockingInitializeTransport()
+	client := NewMCPClient(transport)
+
+	initDone := make(chan error, 1)
+	go func() {
+		initDone <- client.Initialize(context.Background())
+	}()
+
+	select {
+	case <-transport.initStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Initialize() did not start in time")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- client.Close()
+	}()
+
+	select {
+	case <-transport.closeCalled:
+		t.Fatal("transport.Close() called before initialize flow finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(transport.allowInit)
+
+	select {
+	case err := <-initDone:
+		if err != nil {
+			t.Fatalf("Initialize() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Initialize() did not finish in time")
+	}
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() did not finish in time")
+	}
+
+	select {
+	case <-transport.closeCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("transport.Close() was not called")
 	}
 }
 
