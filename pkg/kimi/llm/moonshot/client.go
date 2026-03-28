@@ -35,12 +35,13 @@ type MoonshotClient struct {
 	baseURL        string
 	model          string
 	httpClient     *http.Client
-	thinkingEffort string
+	thinkingEffort llm.ThinkingEffort
 	maxAttempts    int
 	initialBackoff time.Duration
 }
 
 var _ llm.ChatProvider = (*MoonshotClient)(nil)
+var _ llm.ThinkingProvider = (*MoonshotClient)(nil)
 
 // NewMoonshotClient creates a Moonshot HTTP client with sensible defaults.
 func NewMoonshotClient(apiKey, baseURL, model string) *MoonshotClient {
@@ -89,12 +90,12 @@ func (c *MoonshotClient) WithModel(model string) llm.ChatProvider {
 }
 
 // WithThinking returns a cloned provider with updated thinking effort.
-func (c *MoonshotClient) WithThinking(effort string) llm.ChatProvider {
+func (c *MoonshotClient) WithThinking(effort llm.ThinkingEffort) llm.ChatProvider {
 	if c == nil {
 		return c
 	}
 	cloned := *c
-	cloned.thinkingEffort = strings.TrimSpace(effort)
+	cloned.thinkingEffort = llm.NormalizeThinkingEffort(effort)
 	return &cloned
 }
 
@@ -417,8 +418,8 @@ func (c *MoonshotClient) buildChatCompletionRequest(req llm.ChatRequest, stream 
 	if stream {
 		request.StreamOptions = &chatCompletionStreamOptions{IncludeUsage: true}
 	}
-	if effort := strings.TrimSpace(c.thinkingEffort); effort != "" {
-		request.ReasoningEffort = effort
+	if effort := llm.NormalizeThinkingEffort(c.thinkingEffort); effort != llm.ThinkingOff {
+		request.ReasoningEffort = string(effort)
 	}
 
 	return request

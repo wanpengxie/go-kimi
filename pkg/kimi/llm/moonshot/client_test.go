@@ -122,7 +122,7 @@ func TestMoonshotClientChat(t *testing.T) {
 	defer server.Close()
 
 	client := NewMoonshotClient("test-key", server.URL+"/v1", "kimi-k2")
-	provider, ok := client.WithThinking("high").(*MoonshotClient)
+	provider, ok := client.WithThinking(llm.ThinkingHigh).(*MoonshotClient)
 	if !ok {
 		t.Fatal("WithThinking() should return *MoonshotClient")
 	}
