@@ -270,6 +270,15 @@ func liveM8IsEnvSkippableError(err error) bool {
 	if strings.Contains(message, "status 401") || strings.Contains(message, "status 403") {
 		return true
 	}
+	if strings.Contains(message, "status 429") {
+		return true
+	}
+	if strings.Contains(message, "rate_limit") || strings.Contains(message, "rate limit") {
+		return true
+	}
+	if strings.Contains(message, "engine_overloaded") || strings.Contains(message, "overloaded") {
+		return true
+	}
 	return false
 }
 
