@@ -104,6 +104,14 @@ func (s *Soul) SetToolRegistry(registry ToolRegistry) {
 	s.registry = registry
 }
 
+// SetProvider replaces the current chat provider.
+func (s *Soul) SetProvider(provider llm.ChatProvider) {
+	if s == nil {
+		return
+	}
+	s.provider = provider
+}
+
 // SetYolo toggles yolo mode for tool approval.
 func (s *Soul) SetYolo(v bool) {
 	if s == nil || s.approval == nil {
