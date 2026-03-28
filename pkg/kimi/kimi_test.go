@@ -162,8 +162,57 @@ func TestNewAgentCustomProviderBypassesModelRegistry(t *testing.T) {
 		t.Fatalf("Close() error = %v", closeErr)
 	}
 
-	if got := agent.provider.ModelName(); got != "custom-model-not-in-registry" {
-		t.Fatalf("provider model = %q, want %q", got, "custom-model-not-in-registry")
+	if got := agent.provider.ModelName(); got != "base-model" {
+		t.Fatalf("provider model = %q, want %q", got, "base-model")
+	}
+}
+
+func TestNewAgentCustomProviderSkipsModelAndThinkingOverrides(t *testing.T) {
+	t.Parallel()
+
+	runtimeCfg := testRuntimeConfig()
+	runtimeCfg.DefaultThinking = string(llm.ThinkingHigh)
+	provider := &trackingProvider{
+		model:             "caller-model",
+		thinking:          llm.ThinkingMedium,
+		withModelCalls:    new(int),
+		withThinkingCalls: new(int),
+	}
+
+	agent, err := NewAgent(AgentConfig{
+		WorkDir:  t.TempDir(),
+		Config:   runtimeCfg,
+		Provider: provider,
+		Overrides: AgentOverrides{
+			Model:           "override-model",
+			DefaultThinking: string(llm.ThinkingLow),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAgent() error = %v, want nil", err)
+	}
+	if closeErr := agent.Close(); closeErr != nil {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+
+	typed, ok := agent.provider.(*trackingProvider)
+	if !ok {
+		t.Fatalf("provider type = %T, want *trackingProvider", agent.provider)
+	}
+	if typed != provider {
+		t.Fatal("provider pointer changed, want original caller provider")
+	}
+	if typed.model != "caller-model" {
+		t.Fatalf("provider model = %q, want %q", typed.model, "caller-model")
+	}
+	if typed.thinking != llm.ThinkingMedium {
+		t.Fatalf("provider thinking = %q, want %q", typed.thinking, llm.ThinkingMedium)
+	}
+	if *provider.withModelCalls != 0 {
+		t.Fatalf("WithModel call count = %d, want 0", *provider.withModelCalls)
+	}
+	if *provider.withThinkingCalls != 0 {
+		t.Fatalf("WithThinking call count = %d, want 0", *provider.withThinkingCalls)
 	}
 }
 
@@ -235,6 +284,57 @@ func (p *loopingProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatR
 func (p *loopingProvider) ChatStream(_ context.Context, _ llm.ChatRequest) (<-chan llm.ChatEvent, error) {
 	ch := make(chan llm.ChatEvent, 2)
 	ch <- llm.ChatEvent{ToolCall: &types.ToolCall{ID: "call-loop", Name: "loop_tool"}}
+	ch <- llm.ChatEvent{Done: true}
+	close(ch)
+	return ch, nil
+}
+
+type trackingProvider struct {
+	model             string
+	thinking          llm.ThinkingEffort
+	withModelCalls    *int
+	withThinkingCalls *int
+}
+
+func (p *trackingProvider) ModelName() string {
+	if p == nil {
+		return ""
+	}
+	return p.model
+}
+
+func (p *trackingProvider) WithModel(model string) llm.ChatProvider {
+	if p == nil {
+		return p
+	}
+	if p.withModelCalls != nil {
+		*p.withModelCalls++
+	}
+	clone := *p
+	clone.model = strings.TrimSpace(model)
+	return &clone
+}
+
+func (p *trackingProvider) WithThinking(effort llm.ThinkingEffort) llm.ChatProvider {
+	if p == nil {
+		return p
+	}
+	if p.withThinkingCalls != nil {
+		*p.withThinkingCalls++
+	}
+	clone := *p
+	clone.thinking = llm.NormalizeThinkingEffort(effort)
+	return &clone
+}
+
+func (p *trackingProvider) Chat(_ context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{
+		Content: types.ContentParts{types.TextPart{Text: "tracking"}},
+	}, nil
+}
+
+func (p *trackingProvider) ChatStream(_ context.Context, _ llm.ChatRequest) (<-chan llm.ChatEvent, error) {
+	ch := make(chan llm.ChatEvent, 1)
 	ch <- llm.ChatEvent{Done: true}
 	close(ch)
 	return ch, nil

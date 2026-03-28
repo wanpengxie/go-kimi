@@ -449,6 +449,12 @@ func applyOverridesToSpec(spec *agentspec.ResolvedSpec, overrides AgentOverrides
 }
 
 func resolveProvider(cfg config.Config, spec *agentspec.ResolvedSpec, agentCfg AgentConfig) (llm.ChatProvider, string, error) {
+	provider := agentCfg.Provider
+	if provider != nil {
+		// Caller-supplied providers are treated as fully configured and must not be rewritten.
+		return provider, strings.TrimSpace(provider.ModelName()), nil
+	}
+
 	modelName := strings.TrimSpace(spec.Model)
 	if override := strings.TrimSpace(agentCfg.Overrides.Model); override != "" {
 		modelName = override
@@ -457,42 +463,39 @@ func resolveProvider(cfg config.Config, spec *agentspec.ResolvedSpec, agentCfg A
 		modelName = strings.TrimSpace(cfg.DefaultModel)
 	}
 
-	provider := agentCfg.Provider
-	if provider == nil {
-		providerName := strings.TrimSpace(cfg.DefaultProvider)
-		if modelName != "" {
-			model, ok := findModel(cfg.Models, modelName)
-			if !ok {
-				return nil, "", stdErrors.Join(
-					kimierrors.ErrModelNotFound,
-					fmt.Errorf("kimi: model %q not found", modelName),
-				)
-			}
-			providerName = strings.TrimSpace(model.Provider)
-		}
-
-		providerModel, ok := findProvider(cfg.Providers, providerName)
+	providerName := strings.TrimSpace(cfg.DefaultProvider)
+	if modelName != "" {
+		model, ok := findModel(cfg.Models, modelName)
 		if !ok {
 			return nil, "", stdErrors.Join(
-				kimierrors.ErrProviderNotFound,
-				fmt.Errorf("kimi: provider %q not found", providerName),
+				kimierrors.ErrModelNotFound,
+				fmt.Errorf("kimi: model %q not found", modelName),
 			)
 		}
-
-		constructed, err := llm.NewProvider(llm.ProviderConfig{
-			Type:    providerModel.Type,
-			BaseURL: providerModel.BaseURL,
-			APIKey:  providerModel.APIKey.Raw(),
-			Model:   modelName,
-		})
-		if err != nil {
-			return nil, "", &kimierrors.LLMError{
-				Provider: providerModel.Name,
-				Cause:    err,
-			}
-		}
-		provider = constructed
+		providerName = strings.TrimSpace(model.Provider)
 	}
+
+	providerModel, ok := findProvider(cfg.Providers, providerName)
+	if !ok {
+		return nil, "", stdErrors.Join(
+			kimierrors.ErrProviderNotFound,
+			fmt.Errorf("kimi: provider %q not found", providerName),
+		)
+	}
+
+	constructed, err := llm.NewProvider(llm.ProviderConfig{
+		Type:    providerModel.Type,
+		BaseURL: providerModel.BaseURL,
+		APIKey:  providerModel.APIKey.Raw(),
+		Model:   modelName,
+	})
+	if err != nil {
+		return nil, "", &kimierrors.LLMError{
+			Provider: providerModel.Name,
+			Cause:    err,
+		}
+	}
+	provider = constructed
 
 	if modelName != "" {
 		provider = provider.WithModel(modelName)
