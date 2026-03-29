@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
@@ -33,6 +34,144 @@ func TestShellExecuteSuccess(t *testing.T) {
 	}
 	if !strings.Contains(resultOutputText(t, result), "hello world") {
 		t.Fatalf("result output = %q, want contains hello world", resultOutputText(t, result))
+	}
+}
+
+func TestShellExecuteSupportsCommandCompositions(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	tests := []struct {
+		name     string
+		command  string
+		contains string
+		notError bool
+	}{
+		{
+			name:     "and chain",
+			command:  "printf 'a' && printf 'b'",
+			contains: "ab",
+			notError: true,
+		},
+		{
+			name:     "sequence",
+			command:  "printf 'first'; printf ' second'",
+			contains: "first second",
+			notError: true,
+		},
+		{
+			name:     "logical or",
+			command:  "false || printf 'fallback'",
+			contains: "fallback",
+			notError: true,
+		},
+		{
+			name:     "pipe",
+			command:  "printf 'alpha\\nbeta\\n' | grep beta",
+			contains: "beta",
+			notError: true,
+		},
+		{
+			name:     "multi pipe",
+			command:  "printf 'alpha\\nbeta\\n' | grep beta | wc -l",
+			contains: "1",
+			notError: true,
+		},
+		{
+			name:     "command substitution",
+			command:  "printf \"value-$(printf 42)\"",
+			contains: "value-42",
+			notError: true,
+		},
+	}
+
+	for i := range tests {
+		tc := tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, err := tool.Execute(context.Background(), mustParams(t, executeParams{
+				Command: tc.command,
+				Timeout: 3,
+			}))
+			if err != nil {
+				t.Fatalf("Execute(%s) error = %v", tc.name, err)
+			}
+			if tc.notError && result.IsError {
+				t.Fatalf("result.IsError(%s) = %v, want false", tc.name, result.IsError)
+			}
+			if got := resultOutputText(t, result); !strings.Contains(got, tc.contains) {
+				t.Fatalf("result output(%s) = %q, want contains %q", tc.name, got, tc.contains)
+			}
+		})
+	}
+}
+
+func TestShellExecuteSupportsEnvironmentVariables(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	result, err := tool.Execute(context.Background(), mustParams(t, executeParams{
+		Command: "GREETING=hello; printf \"$GREETING world\"",
+		Timeout: 3,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(env vars) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+	if got := resultOutputText(t, result); got != "hello world" {
+		t.Fatalf("result output = %q, want %q", got, "hello world")
+	}
+}
+
+func TestShellExecuteSupportsFileOperations(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	tool := New(workDir, nil)
+	target := filepath.Join(workDir, "build.txt")
+
+	result, err := tool.Execute(context.Background(), mustParams(t, executeParams{
+		Command: "printf 'build artifact' > build.txt; cat build.txt",
+		Timeout: 3,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(file operations) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+	if got := resultOutputText(t, result); got != "build artifact" {
+		t.Fatalf("result output = %q, want %q", got, "build artifact")
+	}
+
+	content, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("os.ReadFile(build.txt) error = %v", readErr)
+	}
+	if got := string(content); got != "build artifact" {
+		t.Fatalf("file content = %q, want %q", got, "build artifact")
+	}
+}
+
+func TestShellExecuteShortSleepWithinTimeout(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	result, err := tool.Execute(context.Background(), mustParams(t, executeParams{
+		Command: "sleep 0.2; printf done",
+		Timeout: 1,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(short sleep) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+	if got := resultOutputText(t, result); got != "done" {
+		t.Fatalf("result output = %q, want %q", got, "done")
 	}
 }
 
@@ -251,6 +390,61 @@ func TestShellExecuteTruncatesLongOutput(t *testing.T) {
 	}
 	if utf8.RuneCountInString(output) > tools.MaxOutputChars {
 		t.Fatalf("output rune count = %d, want <= %d", utf8.RuneCountInString(output), tools.MaxOutputChars)
+	}
+}
+
+func TestShellExecuteTruncatesLongOutputOnFailure(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	params := mustParams(t, executeParams{
+		Command: "for i in $(seq 1 4000); do printf 'failure-line-%04d\\n' \"$i\"; done; exit 1",
+		Timeout: 3,
+	})
+
+	result, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Execute(failure truncation) error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+
+	output := resultOutputText(t, result)
+	if !strings.Contains(output, "...[truncated]") {
+		t.Fatalf("result output = %q, want contains truncated suffix", output)
+	}
+	if utf8.RuneCountInString(output) > tools.MaxOutputChars {
+		t.Fatalf("output rune count = %d, want <= %d", utf8.RuneCountInString(output), tools.MaxOutputChars)
+	}
+}
+
+func TestShellExecuteContextCancellationKillsProcess(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	tool := New(workDir, nil)
+	target := filepath.Join(workDir, "should-not-exist.txt")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+
+	result, err := tool.Execute(ctx, mustParams(t, executeParams{
+		Command: "sleep 5; printf done > should-not-exist.txt",
+		Timeout: 10,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(cancel) error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("expected %q to be absent after cancellation, stat error = %v", target, statErr)
 	}
 }
 

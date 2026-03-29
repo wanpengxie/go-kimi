@@ -93,6 +93,38 @@ func TestToolExecuteForegroundResumeWithModelOverride(t *testing.T) {
 	}
 }
 
+func TestToolExecuteForegroundResumeKeepsExistingSubagentType(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeForegroundRunner{
+		output: types.ToolReturnValue{
+			Value: map[string]any{
+				"agent_id":      "agent-existing",
+				"subagent_type": "planner",
+				"output_text":   "continued",
+			},
+		},
+	}
+	tool := New(runner, nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{
+	  "agent_id":"agent-existing",
+	  "prompt":"continue"
+	}`))
+	if err != nil {
+		t.Fatalf("Execute(foreground resume) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(foreground resume) IsError = true, result=%#v", result)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("runner call count = %d, want 1", len(runner.calls))
+	}
+	if got := runner.calls[0].SubagentType; got != "" {
+		t.Fatalf("runner subagent_type = %q, want empty to preserve existing type", got)
+	}
+}
+
 func TestToolExecuteForegroundRunnerError(t *testing.T) {
 	t.Parallel()
 
@@ -183,6 +215,32 @@ func TestToolExecuteBackground(t *testing.T) {
 	}
 	if got, _ := payload["model_override"].(string); got != "kimi-k2.5" {
 		t.Fatalf("result model_override = %q, want %q", got, "kimi-k2.5")
+	}
+}
+
+func TestToolExecuteBackgroundResumeKeepsExistingSubagentType(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeBackgroundManager{taskID: "task-456"}
+	tool := New(nil, manager)
+	tool.SessionID = "session-42"
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{
+	  "agent_id":"agent-existing",
+	  "prompt":"continue in background",
+	  "run_in_background":true
+	}`))
+	if err != nil {
+		t.Fatalf("Execute(background resume) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(background resume) IsError = true, result=%#v", result)
+	}
+	if len(manager.calls) != 1 {
+		t.Fatalf("CreateAgentTask call count = %d, want 1", len(manager.calls))
+	}
+	if got := manager.calls[0].SubagentType; got != "" {
+		t.Fatalf("spec.SubagentType = %q, want empty to preserve existing type", got)
 	}
 }
 

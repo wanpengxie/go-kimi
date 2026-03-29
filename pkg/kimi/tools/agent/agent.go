@@ -190,7 +190,7 @@ func decodeParams(raw json.RawMessage) (executeParams, error) {
 	}
 	input.AgentID = strings.TrimSpace(input.AgentID)
 	input.SubagentType = strings.TrimSpace(input.SubagentType)
-	if input.SubagentType == "" {
+	if input.SubagentType == "" && input.AgentID == "" {
 		input.SubagentType = defaultSubagentType
 	}
 	input.ModelOverride = strings.TrimSpace(input.ModelOverride)

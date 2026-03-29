@@ -72,6 +72,63 @@ func TestTaskOutputExecuteReadError(t *testing.T) {
 	}
 }
 
+func TestTaskOutputExecuteAfterCompletion(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeTaskManager{
+		task: sampleTaskView("task-1", corebg.TaskCompleted),
+		tailChunk: &corebg.TaskOutputChunk{
+			TaskID:     "task-1",
+			Status:     corebg.TaskCompleted,
+			Offset:     0,
+			NextOffset: 10,
+			Output:     "final logs",
+			EOF:        true,
+		},
+	}
+	tool := NewTaskOutput(manager)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task_id":"task-1"}`))
+	if err != nil {
+		t.Fatalf("Execute(task_output completed) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(task_output completed) IsError = true, result=%#v", result)
+	}
+
+	payload, ok := result.Value.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result payload type = %T, want map[string]any", result.Value.Value)
+	}
+	if got, _ := payload["status"].(string); got != string(corebg.TaskCompleted) {
+		t.Fatalf("payload.status = %q, want %q", got, corebg.TaskCompleted)
+	}
+	if eof, _ := payload["eof"].(bool); !eof {
+		t.Fatalf("payload.eof = %v, want true", eof)
+	}
+}
+
+func TestTaskOutputExecuteMissingTaskDoesNotReadOutput(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeTaskManager{getErr: errors.New("task not found")}
+	tool := NewTaskOutput(manager)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task_id":"task-missing"}`))
+	if err != nil {
+		t.Fatalf("Execute(task_output missing) error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("Execute(task_output missing) IsError = false, want true")
+	}
+	if len(manager.tailCalls) != 0 {
+		t.Fatalf("TailOutput call count = %d, want 0", len(manager.tailCalls))
+	}
+	if len(manager.consumerCalls) != 0 {
+		t.Fatalf("ReadConsumerOutput call count = %d, want 0", len(manager.consumerCalls))
+	}
+}
+
 func TestTaskOutputExecuteWithConsumerID(t *testing.T) {
 	t.Parallel()
 
@@ -261,6 +318,38 @@ func TestTaskStopExecuteKillError(t *testing.T) {
 	}
 }
 
+func TestTaskStopExecuteTerminalTaskNoop(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeTaskManager{
+		task: sampleTaskView("task-1", corebg.TaskCompleted),
+	}
+	tool := NewTaskStop(manager)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"task_id":"task-1"}`))
+	if err != nil {
+		t.Fatalf("Execute(task_stop terminal) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("Execute(task_stop terminal) IsError = true, result=%#v", result)
+	}
+	if len(manager.killCalls) != 1 {
+		t.Fatalf("KillTask call count = %d, want 1", len(manager.killCalls))
+	}
+
+	payload, ok := result.Value.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("result payload type = %T, want map[string]any", result.Value.Value)
+	}
+	taskPayload, ok := payload["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("task payload type = %T, want map[string]any", payload["task"])
+	}
+	if got, _ := taskPayload["status"].(string); got != string(corebg.TaskCompleted) {
+		t.Fatalf("task.status = %q, want %q", got, corebg.TaskCompleted)
+	}
+}
+
 func TestTaskStopDecodeValidation(t *testing.T) {
 	t.Parallel()
 
@@ -274,6 +363,9 @@ type fakeTaskManager struct {
 	task   *corebg.TaskView
 	tasks  []*corebg.TaskView
 	output []byte
+
+	tailChunk     *corebg.TaskOutputChunk
+	consumerChunk *corebg.TaskOutputChunk
 
 	getErr      error
 	listErr     error
@@ -347,6 +439,13 @@ func (m *fakeTaskManager) TailOutput(taskID string, offset int64, maxBytes int) 
 	if m.tailErr != nil {
 		return corebg.TaskOutputChunk{}, m.tailErr
 	}
+	if m.tailChunk != nil {
+		chunk := *m.tailChunk
+		if chunk.TaskID == "" {
+			chunk.TaskID = taskID
+		}
+		return chunk, nil
+	}
 	status := corebg.TaskRunning
 	if m.task != nil {
 		status = m.task.Runtime.Status
@@ -369,6 +468,16 @@ func (m *fakeTaskManager) ReadConsumerOutput(taskID string, consumerID string, m
 	})
 	if m.consumerErr != nil {
 		return corebg.TaskOutputChunk{}, m.consumerErr
+	}
+	if m.consumerChunk != nil {
+		chunk := *m.consumerChunk
+		if chunk.TaskID == "" {
+			chunk.TaskID = taskID
+		}
+		if chunk.ConsumerID == "" {
+			chunk.ConsumerID = consumerID
+		}
+		return chunk, nil
 	}
 	status := corebg.TaskRunning
 	if m.task != nil {

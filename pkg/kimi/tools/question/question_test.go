@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +73,57 @@ func TestAskUserQuestionExecuteWaitsForMatchingResponse(t *testing.T) {
 		}
 	} else if got := answers["strategy"]; got != "blue_green" {
 		t.Fatalf("payload.answers.strategy = %q, want %q", got, "blue_green")
+	}
+}
+
+func TestAskUserQuestionExecuteEmptyAnswersMarkedDismissed(t *testing.T) {
+	t.Parallel()
+
+	hub := wire.NewHub(16)
+	tool := New(hub, hub, func() bool { return false })
+	tool.TimeoutSeconds = 2
+
+	observer := hub.Subscribe()
+	defer hub.Unsubscribe(observer)
+
+	type executeResult struct {
+		result types.ToolResult
+		err    error
+	}
+	resultCh := make(chan executeResult, 1)
+	go func() {
+		result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+			"questions": []map[string]any{
+				{
+					"id":       "decision",
+					"question": "ship?",
+				},
+			},
+		}))
+		resultCh <- executeResult{result: result, err: err}
+	}()
+
+	request := mustReadQuestionRequest(t, observer)
+	hub.Publish(wire.QuestionResponse{
+		RequestID:   request.ID,
+		Answers:     map[string]string{},
+		SubmittedAt: "2026-03-29T09:00:00Z",
+	})
+
+	executed := <-resultCh
+	if executed.err != nil {
+		t.Fatalf("Execute() error = %v", executed.err)
+	}
+	if executed.result.IsError {
+		t.Fatalf("result.IsError = %v, want false", executed.result.IsError)
+	}
+
+	payload := resultPayload(t, executed.result)
+	if dismissed, _ := payload["dismissed"].(bool); !dismissed {
+		t.Fatalf("payload.dismissed = %v, want true", dismissed)
+	}
+	if reason, _ := payload["reason"].(string); reason != "dismissed" {
+		t.Fatalf("payload.reason = %q, want %q", reason, "dismissed")
 	}
 }
 
@@ -147,6 +199,57 @@ func TestAskUserQuestionExecuteTimeoutReturnsToolError(t *testing.T) {
 	output, _ := result.Value.Value.(string)
 	if !strings.Contains(output, "timed out") {
 		t.Fatalf("result output = %q, want contains timed out", output)
+	}
+}
+
+func TestAskUserQuestionExecuteYoloDynamicSwitchDismisses(t *testing.T) {
+	t.Parallel()
+
+	hub := wire.NewHub(8)
+	var yoloFlag atomic.Bool
+	tool := New(hub, hub, func() bool { return yoloFlag.Load() })
+	tool.TimeoutSeconds = 3
+
+	observer := hub.Subscribe()
+	defer hub.Unsubscribe(observer)
+
+	type executeResult struct {
+		result types.ToolResult
+		err    error
+	}
+	resultCh := make(chan executeResult, 1)
+	go func() {
+		result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+			"questions": []map[string]any{
+				{
+					"id":       "rollout",
+					"question": "continue rollout?",
+				},
+			},
+		}))
+		resultCh <- executeResult{result: result, err: err}
+	}()
+
+	_ = mustReadQuestionRequest(t, observer)
+	yoloFlag.Store(true)
+
+	select {
+	case executed := <-resultCh:
+		if executed.err != nil {
+			t.Fatalf("Execute() error = %v", executed.err)
+		}
+		if executed.result.IsError {
+			t.Fatalf("result.IsError = %v, want false", executed.result.IsError)
+		}
+		payload := resultPayload(t, executed.result)
+		if dismissed, _ := payload["dismissed"].(bool); !dismissed {
+			t.Fatalf("payload.dismissed = %v, want true", dismissed)
+		}
+		if reason, _ := payload["reason"].(string); reason != "yolo_mode" {
+			t.Fatalf("payload.reason = %q, want %q", reason, "yolo_mode")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Execute() did not dismiss after yolo dynamic switch")
 	}
 }
 

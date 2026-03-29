@@ -189,6 +189,14 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage) (types.ToolR
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	var yoloTicker *time.Ticker
+	var yoloTick <-chan time.Time
+	if t != nil && t.IsYolo != nil {
+		yoloTicker = time.NewTicker(100 * time.Millisecond)
+		yoloTick = yoloTicker.C
+		defer yoloTicker.Stop()
+	}
+
 	for {
 		select {
 		case <-waitCtx.Done():
@@ -196,6 +204,15 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage) (types.ToolR
 				return errorResult(fmt.Sprintf("ask_user_question: wait response timed out after %d seconds", int(timeout.Seconds()))), nil
 			}
 			return errorResult(fmt.Sprintf("ask_user_question: wait response canceled: %v", waitCtx.Err())), nil
+		case <-yoloTick:
+			if t.isYolo() {
+				return successResult(map[string]any{
+					"request_id": request.ID,
+					"dismissed":  true,
+					"reason":     "yolo_mode",
+					"answers":    map[string]string{},
+				}), nil
+			}
 		case message, ok := <-subscriber:
 			if !ok {
 				return errorResult("ask_user_question: wire subscriber closed"), nil
@@ -207,12 +224,18 @@ func (t *Tool) Execute(ctx context.Context, params json.RawMessage) (types.ToolR
 			if strings.TrimSpace(response.RequestID) != request.ID {
 				continue
 			}
-			return successResult(map[string]any{
+			answers := cloneAnswers(response.Answers)
+			dismissed := len(answers) == 0
+			payload := map[string]any{
 				"request_id":   request.ID,
-				"dismissed":    false,
-				"answers":      cloneAnswers(response.Answers),
+				"dismissed":    dismissed,
+				"answers":      answers,
 				"submitted_at": strings.TrimSpace(response.SubmittedAt),
-			}), nil
+			}
+			if dismissed {
+				payload["reason"] = "dismissed"
+			}
+			return successResult(payload), nil
 		}
 	}
 }
