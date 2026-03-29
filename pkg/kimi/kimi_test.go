@@ -137,6 +137,7 @@ func TestAgentRunReturnsMaxStepsReached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgent() error = %v", err)
 	}
+	defer agent.Close()
 
 	err = agent.Run(context.Background(), "trigger loop")
 	if !stdErrors.Is(err, kimierrors.ErrMaxStepsReached) {
