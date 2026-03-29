@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
+	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
 	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
 )
 
@@ -196,6 +198,101 @@ func TestShellExecuteRejectsUnexpectedField(t *testing.T) {
 	tool := New(t.TempDir(), nil)
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo ok","timeout":1,"unexpected":true}`)); err == nil {
 		t.Fatal("Execute(unexpected field) error = nil, want validation error")
+	}
+}
+
+func TestShellExecuteTruncatesLongLine(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	longLine := strings.Repeat("x", tools.MaxLineLengthChars+400)
+	params := mustParams(t, executeParams{
+		Command: "printf '" + longLine + "'",
+		Timeout: 2,
+	})
+
+	result, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+
+	output := resultOutputText(t, result)
+	if !strings.Contains(output, "...[line-truncated]") {
+		t.Fatalf("result output = %q, want contains line-truncated suffix", output)
+	}
+	if utf8.RuneCountInString(output) > tools.MaxLineLengthChars {
+		t.Fatalf("output rune count = %d, want <= %d", utf8.RuneCountInString(output), tools.MaxLineLengthChars)
+	}
+}
+
+func TestShellExecuteTruncatesLongOutput(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	params := mustParams(t, executeParams{
+		Command: "for i in $(seq 1 4000); do printf 'abcdefghijklmnop\\n'; done",
+		Timeout: 2,
+	})
+
+	result, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+
+	output := resultOutputText(t, result)
+	if !strings.Contains(output, "...[truncated]") {
+		t.Fatalf("result output = %q, want contains truncated suffix", output)
+	}
+	if utf8.RuneCountInString(output) > tools.MaxOutputChars {
+		t.Fatalf("output rune count = %d, want <= %d", utf8.RuneCountInString(output), tools.MaxOutputChars)
+	}
+}
+
+func TestShellExecuteNonZeroExitWithoutOutputIncludesExitStatus(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+	params := mustParams(t, executeParams{
+		Command: "exit 7",
+		Timeout: 2,
+	})
+
+	result, err := tool.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if !strings.Contains(resultOutputText(t, result), "exit status 7") {
+		t.Fatalf("result output = %q, want contains exit status 7", resultOutputText(t, result))
+	}
+}
+
+func TestShellExecuteTimeoutValidation(t *testing.T) {
+	t.Parallel()
+
+	tool := New(t.TempDir(), nil)
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"printf ok"}`))
+	if err != nil {
+		t.Fatalf("Execute(default timeout) error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError(default timeout) = %v, want false", result.IsError)
+	}
+	if got := resultOutputText(t, result); got != "ok" {
+		t.Fatalf("result output(default timeout) = %q, want %q", got, "ok")
+	}
+
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"printf ok","timeout":601}`)); err == nil {
+		t.Fatal("Execute(timeout=601) error = nil, want validation error")
 	}
 }
 

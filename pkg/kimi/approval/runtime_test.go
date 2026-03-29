@@ -3,6 +3,8 @@ package approval
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -242,6 +244,291 @@ func TestApprovalRuntimeGetRequestAndToolCallID(t *testing.T) {
 
 	if _, err := runtime.GetRequest("missing"); !errors.Is(err, ErrRequestNotFound) {
 		t.Fatalf("GetRequest(missing) error = %v, want ErrRequestNotFound", err)
+	}
+}
+
+func TestApprovalRuntimeConcurrentCreateAndResolve(t *testing.T) {
+	t.Parallel()
+
+	runtime := NewApprovalRuntime()
+	const total = 24
+
+	type concurrentRecord struct {
+		id         string
+		decision   ApprovalDecision
+		feedback   string
+		decisionCh <-chan ApprovalDecision
+	}
+
+	created := make([]concurrentRecord, total)
+	createErrCh := make(chan error, total)
+	var createWG sync.WaitGroup
+
+	for i := 0; i < total; i++ {
+		i := i
+		createWG.Add(1)
+		go func() {
+			defer createWG.Done()
+
+			source := ApprovalSource{
+				Kind: SourceForegroundTurn,
+				ID:   fmt.Sprintf("turn-%d", i%4),
+			}
+			if i%2 == 1 {
+				source.Kind = SourceBackgroundAgent
+				source.AgentID = fmt.Sprintf("agent-%d", i%3)
+				source.SubagentType = "planner"
+			}
+
+			decision := ApprovalDecision(i % 3)
+			record, decisionCh, err := runtime.CreateRequest(
+				context.Background(),
+				source,
+				fmt.Sprintf("action-%d", i),
+				fmt.Sprintf("desc-%d", i),
+			)
+			if err != nil {
+				createErrCh <- fmt.Errorf("CreateRequest[%d] error: %w", i, err)
+				return
+			}
+
+			created[i] = concurrentRecord{
+				id:         record.ID,
+				decision:   decision,
+				feedback:   fmt.Sprintf("feedback-%d", i),
+				decisionCh: decisionCh,
+			}
+		}()
+	}
+
+	createWG.Wait()
+	close(createErrCh)
+	for err := range createErrCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if pending := runtime.ListPending(); len(pending) != total {
+		t.Fatalf("ListPending() len = %d, want %d", len(pending), total)
+	}
+
+	seenIDs := make(map[string]struct{}, total)
+	for i := range created {
+		if created[i].id == "" {
+			t.Fatalf("created[%d].id is empty", i)
+		}
+		if _, ok := seenIDs[created[i].id]; ok {
+			t.Fatalf("duplicate request id: %q", created[i].id)
+		}
+		seenIDs[created[i].id] = struct{}{}
+	}
+
+	resolveErrCh := make(chan error, total)
+	var resolveWG sync.WaitGroup
+	for i := range created {
+		i := i
+		resolveWG.Add(1)
+		go func() {
+			defer resolveWG.Done()
+			if err := runtime.Resolve(created[i].id, created[i].decision, "  "+created[i].feedback+"  "); err != nil {
+				resolveErrCh <- fmt.Errorf("Resolve[%d] error: %w", i, err)
+			}
+		}()
+	}
+	resolveWG.Wait()
+	close(resolveErrCh)
+	for err := range resolveErrCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if pending := runtime.ListPending(); len(pending) != 0 {
+		t.Fatalf("ListPending() after resolve len = %d, want 0", len(pending))
+	}
+
+	for i := range created {
+		if decision := waitApprovalDecision(t, created[i].decisionCh); decision != created[i].decision {
+			t.Fatalf("decision[%d] = %v, want %v", i, decision, created[i].decision)
+		}
+
+		record, err := runtime.GetRequest(created[i].id)
+		if err != nil {
+			t.Fatalf("GetRequest(%q) error = %v", created[i].id, err)
+		}
+		if record == nil {
+			t.Fatalf("GetRequest(%q) = nil, want non-nil", created[i].id)
+		}
+		if record.Decision == nil || *record.Decision != created[i].decision {
+			t.Fatalf("record[%d].Decision = %#v, want %v", i, record.Decision, created[i].decision)
+		}
+		if record.ResolvedAt == nil {
+			t.Fatalf("record[%d].ResolvedAt = nil, want non-nil", i)
+		}
+		if record.Feedback != created[i].feedback {
+			t.Fatalf("record[%d].Feedback = %q, want %q", i, record.Feedback, created[i].feedback)
+		}
+	}
+}
+
+func TestApprovalRuntimeCancelBySourceAllowsRecreate(t *testing.T) {
+	t.Parallel()
+
+	runtime := NewApprovalRuntime()
+	sub := runtime.Subscribe()
+
+	firstRecord, firstCh, err := runtime.CreateRequest(
+		context.Background(),
+		ApprovalSource{Kind: SourceBackgroundAgent, ID: "agent-reuse", AgentID: "agent-reuse", SubagentType: "planner"},
+		"shell",
+		"first request",
+	)
+	if err != nil {
+		t.Fatalf("CreateRequest(first) error = %v", err)
+	}
+
+	firstCreated := waitApprovalEvent(t, sub)
+	if firstCreated.Kind != EventRequestCreated || firstCreated.Record == nil || firstCreated.Record.ID != firstRecord.ID {
+		t.Fatalf("first created event = %#v, want request_created id=%q", firstCreated, firstRecord.ID)
+	}
+
+	canceled := runtime.CancelBySource(SourceKind(" background_agent "), " agent-reuse ")
+	if canceled != 1 {
+		t.Fatalf("CancelBySource() = %d, want 1", canceled)
+	}
+	if decision := waitApprovalDecision(t, firstCh); decision != ApprovalReject {
+		t.Fatalf("first decision = %v, want reject", decision)
+	}
+
+	firstResolved := waitApprovalEvent(t, sub)
+	if firstResolved.Kind != EventRequestResolved || firstResolved.Record == nil || firstResolved.Record.ID != firstRecord.ID {
+		t.Fatalf("first resolved event = %#v, want request_resolved id=%q", firstResolved, firstRecord.ID)
+	}
+	if firstResolved.Record.Decision == nil || *firstResolved.Record.Decision != ApprovalReject {
+		t.Fatalf("first resolved decision = %#v, want reject", firstResolved.Record.Decision)
+	}
+	if firstResolved.Record.Feedback != "canceled by source: background_agent/agent-reuse" {
+		t.Fatalf("first resolved feedback = %q, want %q", firstResolved.Record.Feedback, "canceled by source: background_agent/agent-reuse")
+	}
+
+	storedFirst, err := runtime.GetRequest(firstRecord.ID)
+	if err != nil {
+		t.Fatalf("GetRequest(first resolved) error = %v", err)
+	}
+	if storedFirst == nil || storedFirst.Decision == nil || *storedFirst.Decision != ApprovalReject {
+		t.Fatalf("GetRequest(first resolved) = %#v, want resolved reject", storedFirst)
+	}
+
+	secondRecord, secondCh, err := runtime.CreateRequest(
+		context.Background(),
+		ApprovalSource{Kind: SourceBackgroundAgent, ID: "agent-reuse", AgentID: "agent-reuse", SubagentType: "planner"},
+		"search",
+		"second request",
+	)
+	if err != nil {
+		t.Fatalf("CreateRequest(second) error = %v", err)
+	}
+
+	secondCreated := waitApprovalEvent(t, sub)
+	if secondCreated.Kind != EventRequestCreated || secondCreated.Record == nil || secondCreated.Record.ID != secondRecord.ID {
+		t.Fatalf("second created event = %#v, want request_created id=%q", secondCreated, secondRecord.ID)
+	}
+
+	pending := runtime.ListPending()
+	if len(pending) != 1 || pending[0] == nil || pending[0].ID != secondRecord.ID {
+		t.Fatalf("ListPending() = %#v, want only second pending", pending)
+	}
+
+	if err := runtime.Resolve(secondRecord.ID, ApprovalApprove, ""); err != nil {
+		t.Fatalf("Resolve(second) error = %v", err)
+	}
+	if decision := waitApprovalDecision(t, secondCh); decision != ApprovalApprove {
+		t.Fatalf("second decision = %v, want approve", decision)
+	}
+
+	secondResolved := waitApprovalEvent(t, sub)
+	if secondResolved.Kind != EventRequestResolved || secondResolved.Record == nil || secondResolved.Record.ID != secondRecord.ID {
+		t.Fatalf("second resolved event = %#v, want request_resolved id=%q", secondResolved, secondRecord.ID)
+	}
+	if secondResolved.Record.Decision == nil || *secondResolved.Record.Decision != ApprovalApprove {
+		t.Fatalf("second resolved decision = %#v, want approve", secondResolved.Record.Decision)
+	}
+}
+
+func TestApprovalRuntimeEventRecordsAreSnapshots(t *testing.T) {
+	t.Parallel()
+
+	runtime := NewApprovalRuntime()
+	sub := runtime.Subscribe()
+
+	record, _, err := runtime.CreateRequest(
+		context.Background(),
+		ApprovalSource{Kind: SourceForegroundTurn, ID: "turn-snapshot"},
+		"shell",
+		"snapshot case",
+	)
+	if err != nil {
+		t.Fatalf("CreateRequest() error = %v", err)
+	}
+
+	created := waitApprovalEvent(t, sub)
+	if created.Kind != EventRequestCreated || created.Record == nil || created.Record.ID != record.ID {
+		t.Fatalf("created event = %#v, want request_created id=%q", created, record.ID)
+	}
+
+	created.Record.Source.ID = "mutated-source"
+	created.Record.Action = "mutated-action"
+	created.Record.Description = "mutated-description"
+
+	pending, err := runtime.GetRequest(record.ID)
+	if err != nil {
+		t.Fatalf("GetRequest(pending) error = %v", err)
+	}
+	if pending.Source.ID != "turn-snapshot" {
+		t.Fatalf("pending.Source.ID = %q, want %q", pending.Source.ID, "turn-snapshot")
+	}
+	if pending.Action != "shell" {
+		t.Fatalf("pending.Action = %q, want %q", pending.Action, "shell")
+	}
+	if pending.Description != "snapshot case" {
+		t.Fatalf("pending.Description = %q, want %q", pending.Description, "snapshot case")
+	}
+
+	pending.Source.ID = "mutated-from-get"
+	reloadedPending, err := runtime.GetRequest(record.ID)
+	if err != nil {
+		t.Fatalf("GetRequest(reloaded pending) error = %v", err)
+	}
+	if reloadedPending.Source.ID != "turn-snapshot" {
+		t.Fatalf("reloaded pending.Source.ID = %q, want %q", reloadedPending.Source.ID, "turn-snapshot")
+	}
+
+	if err := runtime.Resolve(record.ID, ApprovalApproveForSession, "  keep-trimmed  "); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	resolved := waitApprovalEvent(t, sub)
+	if resolved.Kind != EventRequestResolved || resolved.Record == nil || resolved.Record.ID != record.ID {
+		t.Fatalf("resolved event = %#v, want request_resolved id=%q", resolved, record.ID)
+	}
+
+	decision := ApprovalReject
+	resolved.Record.Decision = &decision
+	resolved.Record.Feedback = "mutated-feedback"
+
+	stored, err := runtime.GetRequest(record.ID)
+	if err != nil {
+		t.Fatalf("GetRequest(resolved) error = %v", err)
+	}
+	if stored.Decision == nil || *stored.Decision != ApprovalApproveForSession {
+		t.Fatalf("stored.Decision = %#v, want approve_for_session", stored.Decision)
+	}
+	if stored.Feedback != "keep-trimmed" {
+		t.Fatalf("stored.Feedback = %q, want %q", stored.Feedback, "keep-trimmed")
+	}
+	if stored.ResolvedAt == nil {
+		t.Fatal("stored.ResolvedAt = nil, want non-nil")
 	}
 }
 

@@ -87,6 +87,73 @@ func TestReadFileExecuteTruncatesLongLine(t *testing.T) {
 	}
 }
 
+func TestReadFileExecuteTruncatesLongOutput(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	path := filepath.Join(workDir, "huge.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("abcdefghijklmnop\n", 4000)), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	tool := NewReadFile(workDir)
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path":    "huge.txt",
+		"n_lines": 4000,
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+
+	output := resultOutputText(t, result)
+	if !strings.Contains(output, outputTruncateSuffix) {
+		t.Fatalf("result output = %q, want truncated suffix", output)
+	}
+	if utf8.RuneCountInString(output) > tools.MaxOutputChars {
+		t.Fatalf("output rune count = %d, want <= %d", utf8.RuneCountInString(output), tools.MaxOutputChars)
+	}
+}
+
+func TestReadFileExecuteLineParamsValidation(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "notes.txt"), []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	tool := NewReadFile(workDir)
+
+	if _, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path":        "notes.txt",
+		"line_offset": -1,
+	})); err == nil {
+		t.Fatal("Execute(line_offset=-1) error = nil, want validation error")
+	}
+
+	if _, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path":    "notes.txt",
+		"n_lines": -1,
+	})); err == nil {
+		t.Fatal("Execute(n_lines=-1) error = nil, want validation error")
+	}
+
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"path":        "notes.txt",
+		"line_offset": 0,
+		"n_lines":     1,
+	}))
+	if err != nil {
+		t.Fatalf("Execute(line_offset=0) error = %v", err)
+	}
+	if got := resultOutputText(t, result); got != "alpha" {
+		t.Fatalf("result output(line_offset=0) = %q, want %q", got, "alpha")
+	}
+}
+
 func TestWriteFileExecuteWritesAndAppends(t *testing.T) {
 	t.Parallel()
 
