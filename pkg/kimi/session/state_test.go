@@ -109,3 +109,55 @@ func TestLoadSessionStateWithoutPlanFieldsDefaultsToInactive(t *testing.T) {
 		t.Fatalf("plan fields = (%q,%q), want empty", got.PlanSessionID, got.PlanSlug)
 	}
 }
+
+func TestLoadSessionStateLegacyVersionNormalizesDefaults(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), []byte(`{
+  "version": 0,
+  "yolo": false,
+  "auto_approve_actions": {"shell.exec": true},
+  "additional_dirs": ["/tmp/data"],
+  "plan_mode": true,
+  "plan_session_id": "  plan-61  ",
+  "plan_slug": "  weekly-plan  "
+}`), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	got, err := LoadSessionState(dir)
+	if err != nil {
+		t.Fatalf("LoadSessionState() error = %v", err)
+	}
+
+	if got.Version != sessionStateVersion {
+		t.Fatalf("Version = %d, want %d", got.Version, sessionStateVersion)
+	}
+	if !got.Yolo {
+		t.Fatalf("Yolo = %v, want true for legacy version", got.Yolo)
+	}
+	if got.PlanSessionID != "plan-61" || got.PlanSlug != "weekly-plan" {
+		t.Fatalf("plan fields = (%q,%q), want trimmed values", got.PlanSessionID, got.PlanSlug)
+	}
+}
+
+func TestSessionStateSaveNilReceiverPersistsDefaults(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	var state *SessionState
+	if err := state.Save(dir); err != nil {
+		t.Fatalf("(*SessionState)(nil).Save() error = %v", err)
+	}
+
+	got, err := LoadSessionState(dir)
+	if err != nil {
+		t.Fatalf("LoadSessionState() error = %v", err)
+	}
+
+	want := NewSessionState()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("LoadSessionState() after nil Save = %#v, want %#v", got, want)
+	}
+}

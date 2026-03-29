@@ -396,3 +396,74 @@ func TestSoulContextAppendValidation(t *testing.T) {
 		t.Fatalf("Append(unknown role) error = %v", err)
 	}
 }
+
+func TestSoulContextCheckpointBoundaries(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	ctx := NewSoulContext(dir)
+
+	if got := ctx.Checkpoint(); got != 0 {
+		t.Fatalf("Checkpoint() on empty context = %d, want 0", got)
+	}
+	if err := ctx.RevertTo(0); err != nil {
+		t.Fatalf("RevertTo(0) on empty context error = %v", err)
+	}
+
+	first := Message{
+		Role:    RoleUser,
+		Content: types.ContentParts{types.TextPart{Text: "first"}},
+	}
+	second := Message{
+		Role:    RoleAssistant,
+		Content: types.ContentParts{types.TextPart{Text: "second"}},
+	}
+	if err := ctx.Append(first); err != nil {
+		t.Fatalf("Append(first) error = %v", err)
+	}
+
+	cp1 := ctx.Checkpoint()
+	cp2 := ctx.Checkpoint()
+	if cp1 != 1 || cp2 != 1 {
+		t.Fatalf("duplicate Checkpoint() ids = (%d,%d), want (1,1)", cp1, cp2)
+	}
+
+	if err := ctx.Append(second); err != nil {
+		t.Fatalf("Append(second) error = %v", err)
+	}
+	if err := ctx.RevertTo(cp1); err != nil {
+		t.Fatalf("RevertTo(%d) error = %v", cp1, err)
+	}
+
+	want := []Message{first}
+	if got := ctx.Messages(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Messages() after RevertTo(%d) = %#v, want %#v", cp1, got, want)
+	}
+
+	restored := NewSoulContext(dir)
+	if err := restored.Restore(); err != nil {
+		t.Fatalf("Restore() error = %v", err)
+	}
+	if got := restored.Messages(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("restored Messages() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSoulContextRestoreRejectsMissingRoleRecord(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, contextJSONLFile)
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	ctx := NewSoulContext(dir)
+	err := ctx.Restore()
+	if err == nil {
+		t.Fatal("Restore() error = nil, want missing role parse failure")
+	}
+	if !strings.Contains(err.Error(), "missing role") {
+		t.Fatalf("Restore() error = %v, want missing role", err)
+	}
+}

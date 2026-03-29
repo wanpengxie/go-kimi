@@ -228,6 +228,134 @@ func TestLoadAgentSpecRequiresName(t *testing.T) {
 	}
 }
 
+func TestLoadAgentSpecRejectsEmptyFile(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "empty.yaml")
+	if err := osWriteFile(path, "\n"); err != nil {
+		t.Fatalf("write file error = %v", err)
+	}
+
+	_, err := LoadAgentSpec(path)
+	if err == nil {
+		t.Fatal("LoadAgentSpec() error = nil, want name required")
+	}
+	if !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("LoadAgentSpec() error = %v, want name is required", err)
+	}
+}
+
+func TestResolveAgentSpecMultiLayerInheritance(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.yaml")
+	midPath := filepath.Join(dir, "mid.yaml")
+	leafPath := filepath.Join(dir, "leaf.yaml")
+
+	if err := osWriteFile(basePath, `
+name: base-agent
+system_prompt: base prompt
+model: model-a
+tools:
+  allowed_tools: ["read_file", "shell"]
+  excluded_tools: ["write_file"]
+subagent_types: ["planner"]
+`); err != nil {
+		t.Fatalf("write base error = %v", err)
+	}
+	if err := osWriteFile(midPath, `
+name: mid-agent
+extends: ./base.yaml
+system_prompt: mid prompt
+tools:
+  allow: ["shell", "exec"]
+  exclude: ["fetch_url"]
+subagent_types: ["executor", "planner"]
+`); err != nil {
+		t.Fatalf("write mid error = %v", err)
+	}
+	if err := osWriteFile(leafPath, `
+name: leaf-agent
+extends: ./mid.yaml
+model: model-c
+tools:
+  allow: ["review", "read_file"]
+subagent_types: ["reviewer"]
+`); err != nil {
+		t.Fatalf("write leaf error = %v", err)
+	}
+
+	resolved, err := ResolveAgentSpec(leafPath)
+	if err != nil {
+		t.Fatalf("ResolveAgentSpec() error = %v", err)
+	}
+
+	if resolved.Name != "leaf-agent" {
+		t.Fatalf("Name = %q, want leaf-agent", resolved.Name)
+	}
+	if resolved.SystemPrompt != "mid prompt" {
+		t.Fatalf("SystemPrompt = %q, want mid prompt", resolved.SystemPrompt)
+	}
+	if resolved.Model != "model-c" {
+		t.Fatalf("Model = %q, want model-c", resolved.Model)
+	}
+	if !reflect.DeepEqual(resolved.AllowedTools, []string{"read_file", "shell", "exec", "review"}) {
+		t.Fatalf("AllowedTools = %#v", resolved.AllowedTools)
+	}
+	if !reflect.DeepEqual(resolved.ExcludedTools, []string{"write_file", "fetch_url"}) {
+		t.Fatalf("ExcludedTools = %#v", resolved.ExcludedTools)
+	}
+	if !reflect.DeepEqual(resolved.SubagentTypes, []string{"planner", "executor", "reviewer"}) {
+		t.Fatalf("SubagentTypes = %#v", resolved.SubagentTypes)
+	}
+	if len(resolved.InheritanceChain) != 3 {
+		t.Fatalf("InheritanceChain len = %d, want 3", len(resolved.InheritanceChain))
+	}
+}
+
+func TestResolveAgentSpecConflictingToolsSortedAcrossLayers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.yaml")
+	midPath := filepath.Join(dir, "mid.yaml")
+	leafPath := filepath.Join(dir, "leaf.yaml")
+
+	if err := osWriteFile(basePath, `
+name: base
+tools:
+  allowed_tools: ["shell"]
+`); err != nil {
+		t.Fatalf("write base error = %v", err)
+	}
+	if err := osWriteFile(midPath, `
+name: mid
+extends: ./base.yaml
+tools:
+  excluded_tools: ["shell"]
+`); err != nil {
+		t.Fatalf("write mid error = %v", err)
+	}
+	if err := osWriteFile(leafPath, `
+name: leaf
+extends: ./mid.yaml
+tools:
+  allow: ["fetch_url"]
+  exclude: ["fetch_url"]
+`); err != nil {
+		t.Fatalf("write leaf error = %v", err)
+	}
+
+	_, err := ResolveAgentSpec(leafPath)
+	if err == nil {
+		t.Fatal("ResolveAgentSpec() error = nil, want allow/exclude conflict")
+	}
+	if !strings.Contains(err.Error(), "fetch_url, shell") {
+		t.Fatalf("ResolveAgentSpec() error = %v, want sorted conflicts", err)
+	}
+}
+
 func osWriteFile(path string, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
