@@ -326,6 +326,122 @@ func TestFetchURLExecuteTruncatesLongOutput(t *testing.T) {
 	}
 }
 
+func TestFetchURLMetadataAndSchemaClone(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(nil)
+	if got := tool.Name(); got != fetchToolName {
+		t.Fatalf("Name() = %q, want %q", got, fetchToolName)
+	}
+	if got := tool.Description(); got != fetchToolDescription {
+		t.Fatalf("Description() = %q, want %q", got, fetchToolDescription)
+	}
+
+	schema := tool.ParameterSchema()
+	if len(schema) == 0 {
+		t.Fatal("ParameterSchema() returned empty schema")
+	}
+	schema[0] = '['
+	if again := string(tool.ParameterSchema()); !strings.HasPrefix(again, "{") {
+		t.Fatalf("ParameterSchema() should return cloned schema, got %q", again)
+	}
+}
+
+func TestFetchURLExecuteParsesHTMLWithoutContentType(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.Header.Get("User-Agent"); got != defaultChromeUserAgent {
+				t.Fatalf("User-Agent = %q, want %q", got, defaultChromeUserAgent)
+			}
+			return mockHTTPResponse(http.StatusOK, "", `<html><body><p>Hello web</p></body></html>`), nil
+		}),
+	})
+
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url": "http://93.184.216.34/html",
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+	if output := resultOutputText(t, result); !strings.Contains(output, "Hello web") {
+		t.Fatalf("result output = %q, want contains %q", output, "Hello web")
+	}
+}
+
+func TestFetchURLExecuteResponseBodyContentLimit(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return mockHTTPResponse(http.StatusOK, "text/plain", strings.Repeat("x", 128)), nil
+		}),
+	})
+	tool.MaxContentBytes = 24
+
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url": "http://93.184.216.34/oversize",
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+	if output := resultOutputText(t, result); !strings.Contains(output, "...[content-truncated]") {
+		t.Fatalf("result output = %q, want contains content truncation suffix", output)
+	}
+}
+
+func TestFetchURLExecuteReadBodyError(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(&http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(errReader{}),
+			}, nil
+		}),
+	})
+
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url": "http://93.184.216.34/read-error",
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if output := resultOutputText(t, result); !strings.Contains(output, "read response body") {
+		t.Fatalf("result output = %q, want contains read response body", output)
+	}
+}
+
+func TestFetchURLExecuteRejectsHostWithNoResolvedAddress(t *testing.T) {
+	t.Parallel()
+
+	tool := NewFetchURL(nil)
+	tool.resolver = hostLookupResolverFunc(func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{}, nil
+	})
+
+	_, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"url": "http://empty.example/path",
+	}))
+	if err == nil {
+		t.Fatal("Execute() error = nil, want resolver empty-address error")
+	}
+	if !strings.Contains(err.Error(), "no IP addresses found") {
+		t.Fatalf("Execute() error = %v, want contains no IP addresses found", err)
+	}
+}
+
 func TestSearchWebExecuteServiceNotConfigured(t *testing.T) {
 	t.Parallel()
 
@@ -512,6 +628,149 @@ func TestSearchWebExecuteInvalidJSONResponse(t *testing.T) {
 	}
 }
 
+func TestSearchWebMetadataAndSchemaClone(t *testing.T) {
+	t.Parallel()
+
+	tool := NewSearchWeb("https://example.com/search", nil)
+	if got := tool.Name(); got != searchToolName {
+		t.Fatalf("Name() = %q, want %q", got, searchToolName)
+	}
+	if got := tool.Description(); got != searchToolDescription {
+		t.Fatalf("Description() = %q, want %q", got, searchToolDescription)
+	}
+
+	schema := tool.ParameterSchema()
+	if len(schema) == 0 {
+		t.Fatal("ParameterSchema() returned empty schema")
+	}
+	schema[0] = '['
+	if again := string(tool.ParameterSchema()); !strings.HasPrefix(again, "{") {
+		t.Fatalf("ParameterSchema() should return cloned schema, got %q", again)
+	}
+}
+
+func TestSearchWebExecuteRequestFailure(t *testing.T) {
+	t.Parallel()
+
+	tool := NewSearchWeb("https://example.com/search", &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("network down")
+		}),
+	})
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"query": "request failure",
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if output := resultOutputText(t, result); !strings.Contains(output, "request failed") {
+		t.Fatalf("result output = %q, want contains request failed", output)
+	}
+}
+
+func TestSearchWebExecuteRejectsBelowRangeLimit(t *testing.T) {
+	t.Parallel()
+
+	tool := NewSearchWeb("https://example.com/search", nil)
+	_, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"query": "oops",
+		"limit": -1,
+	}))
+	if err == nil {
+		t.Fatal("Execute() error = nil, want limit range validation error")
+	}
+}
+
+func TestSearchWebExecuteSupportsItemsPayloadAndLimit(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "items": [
+    {"title": "Result 1", "url": "https://example.com/1"},
+    {"title": "Result 2", "url": "https://example.com/2"},
+    {"title": "Result 3", "url": "https://example.com/3"}
+  ]
+}`))
+	}))
+	t.Cleanup(server.Close)
+
+	tool := NewSearchWeb(server.URL, server.Client())
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"query": "items payload",
+		"limit": 2,
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = %v, want false", result.IsError)
+	}
+
+	output := resultOutputText(t, result)
+	if strings.Contains(output, "Result 3") {
+		t.Fatalf("result output = %q, want Result 3 trimmed by limit", output)
+	}
+	for _, want := range []string{"1. Result 1", "2. Result 2"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("result output = %q, want contains %q", output, want)
+		}
+	}
+}
+
+func TestSearchWebExecuteMissingItemsArrayReturnsDecodeError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"message":"ok"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	tool := NewSearchWeb(server.URL, server.Client())
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"query": "missing array",
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if output := resultOutputText(t, result); !strings.Contains(output, "missing results/items/data array") {
+		t.Fatalf("result output = %q, want contains missing results/items/data array", output)
+	}
+}
+
+func TestSearchWebExecuteResponseBodyLimitTriggersDecodeError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"` + strings.Repeat("x", 128) + `","url":"https://example.com"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	tool := NewSearchWeb(server.URL, server.Client())
+	tool.MaxResponseBytes = 16
+	result, err := tool.Execute(context.Background(), mustParams(t, map[string]any{
+		"query": "truncate body",
+	}))
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result.IsError = %v, want true", result.IsError)
+	}
+	if output := resultOutputText(t, result); !strings.Contains(output, "decode response") {
+		t.Fatalf("result output = %q, want contains decode response", output)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -522,6 +781,12 @@ type hostLookupResolverFunc func(ctx context.Context, host string) ([]net.IPAddr
 
 func (fn hostLookupResolverFunc) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
 	return fn(ctx, host)
+}
+
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) {
+	return 0, fmt.Errorf("boom")
 }
 
 type staticHostResolver map[string][]net.IPAddr
