@@ -726,6 +726,99 @@ func TestSoulRunAppliesSteerInputBetweenSteps(t *testing.T) {
 	}
 }
 
+func TestSoulSteerRejectsWhenNoActiveTurn(t *testing.T) {
+	t.Parallel()
+
+	s := NewSoul(&scriptedChatProvider{}, NewSoulContext(t.TempDir()), mockRegistry{}, wire.NoopEmitter{}, "")
+	err := s.Steer(context.Background(), "steer-without-turn")
+	if err == nil {
+		t.Fatal("Steer() error = nil, want no active turn error")
+	}
+	if !strings.Contains(err.Error(), "no active turn") {
+		t.Fatalf("Steer() error = %q, want contains %q", err.Error(), "no active turn")
+	}
+}
+
+func TestSoulSteerQueueFullRespectsContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	s := NewSoul(&scriptedChatProvider{}, NewSoulContext(t.TempDir()), mockRegistry{}, wire.NoopEmitter{}, "")
+	s.beginTurnRuntime("turn-queue-full")
+
+	for i := 0; i < cap(s.steerCh); i++ {
+		s.steerCh <- steerRequest{
+			TurnID:   "turn-queue-full",
+			Text:     "occupied",
+			Priority: "normal",
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := s.Steer(ctx, "new steer input")
+	if err == nil {
+		t.Fatal("Steer() error = nil, want deadline exceeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Steer() error = %v, want errors.Is(context.DeadlineExceeded)", err)
+	}
+}
+
+func TestSoulConsumeSteerInputsSkipsInvalidAndConsumesAllMatching(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	wireCh := make(chan wire.WireMessage, 8)
+	s := NewSoul(&scriptedChatProvider{}, ctxStore, mockRegistry{}, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.beginTurnRuntime("turn-steer-consume")
+
+	s.steerCh <- steerRequest{TurnID: "other-turn", Text: "ignore-me", Priority: "normal"}
+	s.steerCh <- steerRequest{TurnID: "turn-steer-consume", Text: "   ", Priority: "normal"}
+	s.steerCh <- steerRequest{TurnID: "turn-steer-consume", Text: "first steer", Priority: "normal"}
+	s.steerCh <- steerRequest{TurnID: "turn-steer-consume", Text: "second steer", Priority: "normal"}
+
+	consumed, err := s.consumeSteerInputs("turn-steer-consume")
+	if err != nil {
+		t.Fatalf("consumeSteerInputs() error = %v", err)
+	}
+	if !consumed {
+		t.Fatal("consumeSteerInputs() consumed = false, want true")
+	}
+
+	messages := ctxStore.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("context message count = %d, want 2", len(messages))
+	}
+	if got := contentPartsText(messages[0].Content); strings.TrimSpace(got) != "first steer" {
+		t.Fatalf("messages[0] = %q, want %q", got, "first steer")
+	}
+	if got := contentPartsText(messages[1].Content); strings.TrimSpace(got) != "second steer" {
+		t.Fatalf("messages[1] = %q, want %q", got, "second steer")
+	}
+
+	events := drainWireMessages(wireCh)
+	if len(events) != 2 {
+		t.Fatalf("wire event count = %d, want 2", len(events))
+	}
+	first, ok := events[0].(wire.SteerInput)
+	if !ok || strings.TrimSpace(first.Text) != "first steer" {
+		t.Fatalf("event[0] = %#v, want first steer wire.SteerInput", events[0])
+	}
+	second, ok := events[1].(wire.SteerInput)
+	if !ok || strings.TrimSpace(second.Text) != "second steer" {
+		t.Fatalf("event[1] = %#v, want second steer wire.SteerInput", events[1])
+	}
+
+	consumed, err = s.consumeSteerInputs("turn-steer-consume")
+	if err != nil {
+		t.Fatalf("second consumeSteerInputs() error = %v", err)
+	}
+	if consumed {
+		t.Fatal("second consumeSteerInputs() consumed = true, want false")
+	}
+}
+
 func TestSoulBuildChatMessagesTemplateAndHookNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -842,6 +935,85 @@ func TestSoulPlanModeHookInjectsReminder(t *testing.T) {
 	}
 	if !hasPlanReminder {
 		t.Fatalf("request messages missing plan reminder: %#v", requests[0].Messages)
+	}
+}
+
+func TestSoulPlanModeHookReminderThrottlesEveryThreeSteps(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{ID: "call-1", Name: "echo"}},
+				{Done: true},
+			},
+			{
+				{ToolCall: &types.ToolCall{ID: "call-2", Name: "echo"}},
+				{Done: true},
+			},
+			{
+				{ToolCall: &types.ToolCall{ID: "call-3", Name: "echo"}},
+				{Done: true},
+			},
+			{
+				{Delta: types.TextPart{Text: "done"}},
+				{Done: true},
+			},
+		},
+	}
+	registry := mockRegistry{
+		executors: map[string]ToolExecutor{
+			"echo": executorFunc(func(_ context.Context, call types.ToolCall) (types.ToolResult, error) {
+				return types.ToolResult{
+					ToolCallID: call.ID,
+					Name:       call.Name,
+					Value:      types.ToolReturnValue{Value: "ok"},
+				}, nil
+			}),
+		},
+	}
+
+	s := NewSoul(provider, ctxStore, registry, wire.NoopEmitter{}, "")
+	s.SetPlanModeState(PlanModeState{
+		Active:    true,
+		SessionID: "session-throttle",
+		Slug:      "plan-throttle",
+	})
+
+	if _, err := s.Run(context.Background(), types.ContentParts{
+		types.TextPart{Text: "run four steps"},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 4 {
+		t.Fatalf("provider request count = %d, want 4", len(requests))
+	}
+
+	countReminder := func(messages []llm.Message) int {
+		count := 0
+		for i := range messages {
+			text := contentPartsText(messages[i].Content)
+			if strings.Contains(text, "Plan mode is active") && strings.Contains(text, "plan-throttle") {
+				count++
+			}
+		}
+		return count
+	}
+
+	if got := countReminder(requests[0].Messages); got != 1 {
+		t.Fatalf("step-1 reminder count = %d, want 1", got)
+	}
+	if got := countReminder(requests[1].Messages); got != 0 {
+		t.Fatalf("step-2 reminder count = %d, want 0", got)
+	}
+	if got := countReminder(requests[2].Messages); got != 0 {
+		t.Fatalf("step-3 reminder count = %d, want 0", got)
+	}
+	if got := countReminder(requests[3].Messages); got != 1 {
+		t.Fatalf("step-4 reminder count = %d, want 1", got)
 	}
 }
 
@@ -1146,6 +1318,79 @@ func TestSoulStepPlanModeAutoApprovesPlanFileMutation(t *testing.T) {
 	})
 
 	result, err := s.step(context.Background(), "turn-plan-auto-approve")
+	if err != nil {
+		t.Fatalf("step() error = %v", err)
+	}
+	if len(result.ToolResults) != 1 {
+		t.Fatalf("len(result.ToolResults) = %d, want 1", len(result.ToolResults))
+	}
+	if result.ToolResults[0].IsError {
+		t.Fatalf("ToolResult.IsError = %v, want false", result.ToolResults[0].IsError)
+	}
+	if !executed {
+		t.Fatalf("tool executor executed = false, want true")
+	}
+
+	events := drainWireMessages(wireCh)
+	if len(events) != 2 {
+		t.Fatalf("wire event count = %d, want 2", len(events))
+	}
+	if _, ok := events[0].(wire.ToolCallRequest); !ok {
+		t.Fatalf("event[0] = %T, want wire.ToolCallRequest", events[0])
+	}
+	if _, ok := events[1].(wire.ToolCallResult); !ok {
+		t.Fatalf("event[1] = %T, want wire.ToolCallResult", events[1])
+	}
+}
+
+func TestSoulStepPlanModeAutoApprovesStrReplacePlanFileMutation(t *testing.T) {
+	t.Parallel()
+
+	ctxStore := NewSoulContext(t.TempDir())
+	planFile := filepath.Join(t.TempDir(), "plan.md")
+
+	provider := &scriptedChatProvider{
+		streams: [][]llm.ChatEvent{
+			{
+				{ToolCall: &types.ToolCall{
+					ID:   "call-1",
+					Name: "str_replace",
+					Arguments: map[string]any{
+						"path":       planFile,
+						"old_string": "phase 1",
+						"new_string": "phase 2",
+					},
+				}},
+				{Done: true},
+			},
+		},
+	}
+
+	executed := false
+	registry := mockRegistry{
+		executors: map[string]ToolExecutor{
+			"str_replace": executorFunc(func(_ context.Context, call types.ToolCall) (types.ToolResult, error) {
+				executed = true
+				return types.ToolResult{
+					ToolCallID: call.ID,
+					Name:       call.Name,
+					Value: types.ToolReturnValue{
+						Value: "ok",
+					},
+				}, nil
+			}),
+		},
+	}
+
+	wireCh := make(chan wire.WireMessage, 16)
+	s := NewSoul(provider, ctxStore, registry, wire.ChannelEmitter{Ch: wireCh}, "")
+	s.SetYolo(false)
+	s.SetPlanModeState(PlanModeState{
+		Active:   true,
+		PlanFile: planFile,
+	})
+
+	result, err := s.step(context.Background(), "turn-plan-auto-approve-str-replace")
 	if err != nil {
 		t.Fatalf("step() error = %v", err)
 	}
