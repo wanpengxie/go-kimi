@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/agentspec"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/agentspec"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	kimierrors "github.com/wanpengxie/go-kimi/pkg/kimi/errors"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestVersionIsSet(t *testing.T) {
@@ -85,8 +85,8 @@ func TestNewAgent_ConstructorCleanup(t *testing.T) {
 		AllowedTools: []string{"does_not_exist"},
 	}
 
-	beforeMerger := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*MergingSubscriber).run")
-	beforeRecorder := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*Recorder).run")
+	beforeMerger := countWireGoroutineStacks(t, "github.com/wanpengxie/go-kimi/pkg/kimi/wire.(*MergingSubscriber).run")
+	beforeRecorder := countWireGoroutineStacks(t, "github.com/wanpengxie/go-kimi/pkg/kimi/wire.(*Recorder).run")
 
 	const attempts = 12
 	for i := 0; i < attempts; i++ {
@@ -105,8 +105,8 @@ func TestNewAgent_ConstructorCleanup(t *testing.T) {
 
 	waitDeadline := time.Now().Add(2 * time.Second)
 	for {
-		afterMerger := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*MergingSubscriber).run")
-		afterRecorder := countWireGoroutineStacks(t, "github.com/xiewanpeng/go-kimi/pkg/kimi/wire.(*Recorder).run")
+		afterMerger := countWireGoroutineStacks(t, "github.com/wanpengxie/go-kimi/pkg/kimi/wire.(*MergingSubscriber).run")
+		afterRecorder := countWireGoroutineStacks(t, "github.com/wanpengxie/go-kimi/pkg/kimi/wire.(*Recorder).run")
 		if afterMerger <= beforeMerger && afterRecorder <= beforeRecorder {
 			return
 		}

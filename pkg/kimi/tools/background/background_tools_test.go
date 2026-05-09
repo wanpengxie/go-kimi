@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
 )
 
 func TestTaskOutputExecuteSuccess(t *testing.T) {

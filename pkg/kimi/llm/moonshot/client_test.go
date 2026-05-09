@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 func TestNewMoonshotClientDefaultsAndFromConfig(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
 )
 
 type transportFactory func(cfg MCPServerConfig) (Transport, error)

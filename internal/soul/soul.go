@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
-	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	approvalruntime "github.com/wanpengxie/go-kimi/pkg/kimi/approval"
+	kimierrors "github.com/wanpengxie/go-kimi/pkg/kimi/errors"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 const (

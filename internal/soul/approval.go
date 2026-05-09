@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
+	approvalruntime "github.com/wanpengxie/go-kimi/pkg/kimi/approval"
 )
 
 // ApprovalDecision is one approval outcome for one pending request.

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 const (

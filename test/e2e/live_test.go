@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm/moonshot"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm/moonshot"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 const liveDefaultBaseURL = "https://api.moonshot.ai/v1"

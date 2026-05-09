@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/session"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/subagents"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/session"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/subagents"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 func TestScriptedSessionLifecycle(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/xiewanpeng/go-kimi
+module github.com/wanpengxie/go-kimi
 
 go 1.25.0
 

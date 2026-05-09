@@ -5,7 +5,7 @@ package e2e
 import (
 	"testing"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi"
+	"github.com/wanpengxie/go-kimi/pkg/kimi"
 )
 
 func TestE2ESmoke(t *testing.T) {

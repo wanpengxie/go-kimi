@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestNewDefaultConfig(t *testing.T) {

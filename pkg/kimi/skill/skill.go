@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	skillflow "github.com/xiewanpeng/go-kimi/pkg/kimi/skill/flow"
+	skillflow "github.com/wanpengxie/go-kimi/pkg/kimi/skill/flow"
 )
 
 const (

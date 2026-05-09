@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm/moonshot"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/session"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/subagents"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	agenttool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/agent"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm/moonshot"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/session"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/subagents"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	agenttool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/agent"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestLiveSessionWithSoul(t *testing.T) {

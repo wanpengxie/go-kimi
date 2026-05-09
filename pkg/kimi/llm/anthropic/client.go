@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	llmhttputil "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/internal/httputil"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	llmhttputil "github.com/wanpengxie/go-kimi/pkg/kimi/llm/internal/httputil"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 const (
@@ -176,6 +176,7 @@ func (c *AnthropicClient) consumeStream(ctx context.Context, body io.ReadCloser,
 	scanner.Buffer(make([]byte, 0, 64*1024), streamScannerMaxSize)
 
 	toolBlocks := map[int]*streamToolUse{}
+	thinkingBlocks := map[int]*streamThinking{}
 	var usage *types.TokenUsage
 	var eventName string
 	dataLines := make([]string, 0, 2)
@@ -189,7 +190,7 @@ func (c *AnthropicClient) consumeStream(ctx context.Context, body io.ReadCloser,
 
 		frameData := strings.Join(dataLines, "\n")
 		dataLines = dataLines[:0]
-		stop := c.handleStreamFrame(ctx, out, strings.TrimSpace(eventName), frameData, toolBlocks, &usage, &doneEmitted)
+		stop := c.handleStreamFrame(ctx, out, strings.TrimSpace(eventName), frameData, toolBlocks, thinkingBlocks, &usage, &doneEmitted)
 		eventName = ""
 		return stop
 	}
@@ -238,6 +239,7 @@ func (c *AnthropicClient) handleStreamFrame(
 	eventName string,
 	data string,
 	toolBlocks map[int]*streamToolUse,
+	thinkingBlocks map[int]*streamThinking,
 	usage **types.TokenUsage,
 	doneEmitted *bool,
 ) bool {
@@ -286,6 +288,14 @@ func (c *AnthropicClient) handleStreamFrame(
 		if blockType == "" {
 			return false
 		}
+		// Thinking blocks need an internal builder so we can collect
+		// thinking_delta + signature_delta chunks and emit one complete
+		// ThinkPart at content_block_stop. Tool-use blocks keep the
+		// existing per-index streamToolUse builder.
+		if blockType == "thinking" {
+			thinkingBlocks[payload.Index] = &streamThinking{}
+			return false
+		}
 		block := &streamToolUse{
 			Type: blockType,
 			ID:   strings.TrimSpace(payload.ContentBlock.ID),
@@ -313,10 +323,25 @@ func (c *AnthropicClient) handleStreamFrame(
 				}
 			}
 		case "thinking_delta":
+			// Accumulate text into the per-block builder so the final
+			// ThinkPart emitted at content_block_stop carries both the
+			// full thinking text AND the signature attached to it.
 			if payload.Delta.Thinking != "" {
-				if !c.emitEvent(ctx, out, llm.ChatEvent{Delta: types.ThinkPart{Think: payload.Delta.Thinking}}) {
-					return true
+				tb := thinkingBlocks[payload.Index]
+				if tb == nil {
+					tb = &streamThinking{}
+					thinkingBlocks[payload.Index] = tb
 				}
+				tb.think.WriteString(payload.Delta.Thinking)
+			}
+		case "signature_delta":
+			if payload.Delta.Signature != "" {
+				tb := thinkingBlocks[payload.Index]
+				if tb == nil {
+					tb = &streamThinking{}
+					thinkingBlocks[payload.Index] = tb
+				}
+				tb.signature.WriteString(payload.Delta.Signature)
 			}
 		case "input_json_delta":
 			block := toolBlocks[payload.Index]
@@ -337,6 +362,23 @@ func (c *AnthropicClient) handleStreamFrame(
 			c.emitEvent(ctx, out, llm.ChatEvent{Err: fmt.Errorf("anthropic chat stream: decode content_block_stop: %w", err), Done: true})
 			*doneEmitted = true
 			return true
+		}
+		// Flush a thinking builder if one was opened for this index.
+		// Emit ONE ThinkPart per logical thinking block — both Think and
+		// Signature populated — so consumers (and downstream history
+		// round-trip via buildAssistantContent) see a single, complete
+		// block instead of many fragments.
+		if tb, ok := thinkingBlocks[payload.Index]; ok {
+			delete(thinkingBlocks, payload.Index)
+			if tb.think.Len() > 0 || tb.signature.Len() > 0 {
+				if !c.emitEvent(ctx, out, llm.ChatEvent{Delta: types.ThinkPart{
+					Think:     tb.think.String(),
+					Signature: tb.signature.String(),
+				}}) {
+					return true
+				}
+			}
+			return false
 		}
 		if !c.emitToolCallByIndex(ctx, out, toolBlocks, payload.Index) {
 			return true
@@ -586,6 +628,27 @@ func encodeRegularContent(parts types.ContentParts) []messageContentBlock {
 			if typed != nil && typed.Text != "" {
 				content = append(content, messageContentBlock{Type: "text", Text: typed.Text})
 			}
+		case types.ThinkPart:
+			// Round-trip thinking blocks back to the API. DeepSeek's
+			// anthropic-compat endpoint hard-rejects requests whose
+			// history loses thinking blocks (the model emitted them and
+			// the signature must come back verbatim). The same applies
+			// to upstream Anthropic when extended thinking is in use.
+			if typed.Think != "" || typed.Signature != "" {
+				content = append(content, messageContentBlock{
+					Type:      "thinking",
+					Thinking:  typed.Think,
+					Signature: typed.Signature,
+				})
+			}
+		case *types.ThinkPart:
+			if typed != nil && (typed.Think != "" || typed.Signature != "") {
+				content = append(content, messageContentBlock{
+					Type:      "thinking",
+					Thinking:  typed.Think,
+					Signature: typed.Signature,
+				})
+			}
 		case types.ImageURLPart:
 			if typed.ImageURL != "" {
 				content = append(content, messageContentBlock{Type: "text", Text: typed.ImageURL})
@@ -789,8 +852,14 @@ func decodeMessageContent(content []messageContentBlock) types.ContentParts {
 				parts = append(parts, types.TextPart{Text: content[i].Text})
 			}
 		case "thinking":
-			if content[i].Thinking != "" {
-				parts = append(parts, types.ThinkPart{Think: content[i].Thinking})
+			// Preserve Signature so it can be round-tripped on the next
+			// turn — DeepSeek and Anthropic both reject requests where a
+			// historical thinking block has lost its signature.
+			if content[i].Thinking != "" || content[i].Signature != "" {
+				parts = append(parts, types.ThinkPart{
+					Think:     content[i].Thinking,
+					Signature: content[i].Signature,
+				})
 			}
 		}
 	}
@@ -842,9 +911,11 @@ func decodeTokenUsage(usage *messageUsage) types.TokenUsage {
 		total = usage.InputTokens + usage.OutputTokens
 	}
 	return types.TokenUsage{
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
-		TotalTokens:  total,
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		TotalTokens:              total,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
 	}
 }
 
@@ -867,6 +938,12 @@ func mergeUsage(base *types.TokenUsage, usage *messageUsage) *types.TokenUsage {
 		merged.TotalTokens = usage.TotalTokens
 	} else if merged.InputTokens > 0 || merged.OutputTokens > 0 {
 		merged.TotalTokens = merged.InputTokens + merged.OutputTokens
+	}
+	if usage.CacheCreationInputTokens > 0 {
+		merged.CacheCreationInputTokens = usage.CacheCreationInputTokens
+	}
+	if usage.CacheReadInputTokens > 0 {
+		merged.CacheReadInputTokens = usage.CacheReadInputTokens
 	}
 	return &merged
 }
@@ -946,9 +1023,11 @@ type messagesResponse struct {
 }
 
 type messageUsage struct {
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
-	TotalTokens  int `json:"total_tokens,omitempty"`
+	InputTokens              int `json:"input_tokens,omitempty"`
+	OutputTokens             int `json:"output_tokens,omitempty"`
+	TotalTokens              int `json:"total_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 type streamMessageStartEvent struct {
@@ -979,8 +1058,21 @@ type streamContentBlockDeltaEvent struct {
 		Type        string `json:"type,omitempty"`
 		Text        string `json:"text,omitempty"`
 		Thinking    string `json:"thinking,omitempty"`
+		Signature   string `json:"signature,omitempty"`
 		PartialJSON string `json:"partial_json,omitempty"`
 	} `json:"delta"`
+}
+
+// streamThinking accumulates a thinking block across the chunk events
+// (thinking_delta + signature_delta). The completed ThinkPart (with
+// Signature attached) is emitted at content_block_stop so downstream
+// consumers see one ThinkPart per logical thinking block, not one per
+// streaming chunk — that matters for round-trip back to the API:
+// DeepSeek's anthropic-compat endpoint hard-rejects requests where
+// thinking blocks have lost their signature.
+type streamThinking struct {
+	think     strings.Builder
+	signature strings.Builder
 }
 
 type streamContentBlockStopEvent struct {

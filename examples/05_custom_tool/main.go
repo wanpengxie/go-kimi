@@ -4,7 +4,7 @@
 package main
 
 import (
-	_ "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/openai"
+	_ "github.com/wanpengxie/go-kimi/pkg/kimi/llm/openai"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	kimi "github.com/xiewanpeng/go-kimi/pkg/kimi"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	kimi "github.com/wanpengxie/go-kimi/pkg/kimi"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 // CalculatorTool 是一个自定义计算器工具

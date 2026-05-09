@@ -11,15 +11,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/skill"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	toolfile "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/file"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/shell"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/think"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/skill"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	toolfile "github.com/wanpengxie/go-kimi/pkg/kimi/tools/file"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools/shell"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools/think"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestScriptedThinkTool(t *testing.T) {

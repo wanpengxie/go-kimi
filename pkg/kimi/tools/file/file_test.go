@@ -11,8 +11,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 const tinyPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO5N2ioAAAAASUVORK5CYII="

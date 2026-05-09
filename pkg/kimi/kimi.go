@@ -13,29 +13,30 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/agentspec"
-	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/mcp"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/session"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/skill"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/subagents"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	agenttool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/agent"
-	bgtools "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/background"
-	dmailtool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/dmail"
-	toolfile "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/file"
-	plantool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/plan"
-	questiontool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/question"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/shell"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/think"
-	webtool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/web"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/agentspec"
+	approvalruntime "github.com/wanpengxie/go-kimi/pkg/kimi/approval"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	kimierrors "github.com/wanpengxie/go-kimi/pkg/kimi/errors"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/mcp"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/session"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/skill"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/subagents"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	agenttool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/agent"
+	bgtools "github.com/wanpengxie/go-kimi/pkg/kimi/tools/background"
+	dmailtool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/dmail"
+	toolfile "github.com/wanpengxie/go-kimi/pkg/kimi/tools/file"
+	plantool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/plan"
+	questiontool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/question"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools/shell"
+	sbtools "github.com/wanpengxie/go-kimi/pkg/kimi/tools/sandbox"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools/think"
+	webtool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/web"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 const (
@@ -74,6 +75,51 @@ type AgentConfig struct {
 	AdditionalTools []tools.Tool
 
 	ApprovalRuntime *approvalruntime.ApprovalRuntime
+
+	// SandboxBackend optionally redirects the standard tool set
+	// (shell / read_file / write_file / str_replace / grep / glob /
+	// read_media_file) to a custom execution layer.
+	//
+	// When nil, NewAgent registers the in-process tools from tools/shell +
+	// tools/file as before — this is the historical behaviour and is the
+	// default for direct CLI / library users.
+	//
+	// When non-nil, NewAgent installs sandbox.StandardToolsFromBackend(...)
+	// in place of the in-process tools and routes every standard tool call
+	// through the supplied backend. The non-sandbox tools (think / question /
+	// plan / agent / background / dmail / web) keep their existing
+	// in-process implementations unchanged.
+	//
+	// This is the seam used by cloudagent and any other adopter that needs
+	// to forward execution somewhere else (a docker container, a remote
+	// machine, an arbitrary sandbox) — see pkg/kimi/tools/sandbox for the
+	// background and the LocalBackend reference implementation.
+	SandboxBackend sbtools.SandboxBackend
+
+	// DisableStandardSandboxTools, when true, suppresses the standard
+	// sandbox tool set entirely (shell / read_file / write_file /
+	// str_replace / grep / glob / read_media_file). The non-sandbox tools
+	// (think / question / plan / agent / background / dmail / web) are
+	// still registered.
+	//
+	// This is for adopters that ship their own catalog of "shell"-class
+	// tools via AdditionalTools and need to be the sole declarer of those
+	// names. Without this flag, the standard sandbox tools win the
+	// candidate-dedup race against same-named AdditionalTools (first
+	// candidate registered for a given name wins — see filterTools), so
+	// the AdditionalTools entry is silently dropped.
+	//
+	// cloudagent uses this: the brain↔hand wire ships the hand's own
+	// manifest (which already includes shell / read_file / etc., with the
+	// hand's own input schemas), and the brain MUST forward every tool
+	// call to the hand rather than execute anything in-process. Setting
+	// this flag (alongside AdditionalTools containing the manifest tools)
+	// gives the LLM exactly the hand-declared catalog with no name clash.
+	//
+	// When SandboxBackend is non-nil, this flag is ignored —
+	// SandboxBackend already redirects the standard tools (it does not
+	// suppress them), which is the documented behaviour for that path.
+	DisableStandardSandboxTools bool
 }
 
 // Agent is one assembled SDK runtime facade.
@@ -218,6 +264,8 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		supportsVideo,
 		ctxStore,
 		planSyncer,
+		cfg.SandboxBackend,
+		cfg.DisableStandardSandboxTools,
 	)
 	candidates = append(candidates, mcpTools...)
 	candidates = append(candidates, cfg.AdditionalTools...)
@@ -389,6 +437,32 @@ func (a *Agent) LastResult() soul.StepResult {
 	return a.lastResult
 }
 
+// RegisteredToolNames returns the sorted set of tool names that the
+// agent's LLM-facing catalog currently exposes. It is a read-only
+// introspection helper — useful for adopters (cloudagent, tests) that
+// need to assert which tools the agent will actually offer the model
+// without spinning a real LLM round-trip.
+//
+// Returns nil when the agent or its engine is uninitialised.
+func (a *Agent) RegisteredToolNames() []string {
+	if a == nil || a.engine == nil {
+		return nil
+	}
+	registry := a.engine.ToolRegistry()
+	if registry == nil {
+		return nil
+	}
+	defs := registry.Definitions()
+	if len(defs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(defs))
+	for i := range defs {
+		names = append(names, defs[i].Name)
+	}
+	return names
+}
+
 func resolveRuntimeConfig(cfg AgentConfig) (config.Config, error) {
 	if path := strings.TrimSpace(cfg.ConfigPath); path != "" {
 		loaded, err := config.LoadConfigWithEnv(path)
@@ -523,6 +597,8 @@ func buildToolCandidates(
 	supportsVideo bool,
 	dmailContext dmailtool.MailContext,
 	planSyncer plantool.ModeSyncer,
+	sandboxBackend sbtools.SandboxBackend,
+	disableStandardSandbox bool,
 ) []tools.Tool {
 	enterPlan := plantool.NewEnterPlanMode(workDir, planState).
 		ConfigureQuestionFlow(plantool.QuestionFlow{
@@ -539,15 +615,40 @@ func buildToolCandidates(
 		}).
 		SetModeSyncer(planSyncer)
 
-	candidates := []tools.Tool{
-		think.New(),
-		shell.NewWithBackground(workDir, nil, backgroundManager, sessionID),
-		toolfile.NewReadFile(workDir),
-		toolfile.NewReadMediaFile(workDir, supportsVision, supportsVideo),
-		toolfile.NewWriteFile(workDir, nil),
-		toolfile.NewStrReplace(workDir, nil),
-		toolfile.NewGrep(workDir),
-		toolfile.NewGlob(workDir),
+	// Sandbox-related tools (shell + file family) are routed through the
+	// SandboxBackend seam when provided; otherwise we keep the historical
+	// in-process implementations so existing callers see no behaviour
+	// change. The agent's tool catalog stays identical either way — it is
+	// only the execution layer that flips.
+	//
+	// When disableStandardSandbox is true (and SandboxBackend is nil),
+	// the standard sandbox tools are suppressed entirely. The caller is
+	// expected to ship its own catalog of these names via AdditionalTools.
+	// See AgentConfig.DisableStandardSandboxTools for the rationale.
+	var sandboxTools []tools.Tool
+	switch {
+	case sandboxBackend != nil:
+		sandboxTools = sbtools.StandardToolsFromBackend(sandboxBackend)
+	case disableStandardSandbox:
+		sandboxTools = nil
+	default:
+		sandboxTools = []tools.Tool{
+			shell.NewWithBackground(workDir, nil, backgroundManager, sessionID),
+			toolfile.NewReadFile(workDir),
+			toolfile.NewReadMediaFile(workDir, supportsVision, supportsVideo),
+			toolfile.NewWriteFile(workDir, nil),
+			toolfile.NewStrReplace(workDir, nil),
+			toolfile.NewGrep(workDir),
+			toolfile.NewGlob(workDir),
+		}
+	}
+
+	// Non-sandbox tools (agent meta-controls + IO tools that aren't bound
+	// to the sandbox concept) keep their in-process implementations
+	// regardless of backend choice.
+	candidates := []tools.Tool{think.New()}
+	candidates = append(candidates, sandboxTools...)
+	candidates = append(candidates,
 		questiontool.New(questionHub, questionPublisher, yoloChecker),
 		enterPlan,
 		exitPlan,
@@ -556,7 +657,7 @@ func buildToolCandidates(
 		bgtools.NewTaskList(backgroundManager),
 		bgtools.NewTaskOutput(backgroundManager),
 		bgtools.NewTaskStop(backgroundManager),
-	}
+	)
 
 	if cfg.Services.MoonshotFetch.Enabled {
 		fetchTool := webtool.NewFetchURL(http.DefaultClient)

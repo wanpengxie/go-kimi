@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
-	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
+	toolparams "github.com/wanpengxie/go-kimi/pkg/kimi/tools/internal/params"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 const (

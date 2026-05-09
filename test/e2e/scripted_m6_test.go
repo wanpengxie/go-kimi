@@ -14,14 +14,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	anthropicllm "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/anthropic"
-	geminillm "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/gemini"
-	moonshotllm "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/moonshot"
-	openaillm "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/openai"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	anthropicllm "github.com/wanpengxie/go-kimi/pkg/kimi/llm/anthropic"
+	geminillm "github.com/wanpengxie/go-kimi/pkg/kimi/llm/gemini"
+	moonshotllm "github.com/wanpengxie/go-kimi/pkg/kimi/llm/moonshot"
+	openaillm "github.com/wanpengxie/go-kimi/pkg/kimi/llm/openai"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestScriptedProviderFactory(t *testing.T) {

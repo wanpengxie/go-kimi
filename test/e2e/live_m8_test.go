@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	kimi "github.com/xiewanpeng/go-kimi/pkg/kimi"
-	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/session"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	kimi "github.com/wanpengxie/go-kimi/pkg/kimi"
+	approvalruntime "github.com/wanpengxie/go-kimi/pkg/kimi/approval"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/session"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestLiveM8AgentFacadeBasicTurn(t *testing.T) {

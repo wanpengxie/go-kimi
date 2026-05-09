@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 // BuildConfig defines runtime dependencies used to build one subagent soul instance.

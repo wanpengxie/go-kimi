@@ -11,10 +11,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	toolparams "github.com/wanpengxie/go-kimi/pkg/kimi/tools/internal/params"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 const (

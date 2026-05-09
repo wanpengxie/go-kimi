@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	kimierrors "github.com/wanpengxie/go-kimi/pkg/kimi/errors"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 // Run executes one turn loop with optional tool call iterations.
@@ -198,6 +198,13 @@ func shouldRetryStepError(err error) bool {
 		return false
 	}
 	if errors.Is(err, errToolsAlreadyExecuted) {
+		return false
+	}
+	// Backend disconnect is permanent for this run — there is no recovery
+	// inside the agent loop. Surface the error verbatim to the Soul.Run
+	// caller so they can present a "remote sandbox gone" message to the
+	// human and start a fresh conversation.
+	if errors.Is(err, kimierrors.ErrBackendDisconnected) {
 		return false
 	}
 	if strings.Contains(err.Error(), "parse system prompt template") {

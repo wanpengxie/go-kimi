@@ -1,6 +1,6 @@
 package llm
 
-import "github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+import "github.com/wanpengxie/go-kimi/pkg/kimi/types"
 
 // Message is one chat message in provider request history.
 type Message struct {

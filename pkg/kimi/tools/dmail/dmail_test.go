@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 func TestSendDMailExecuteSuccess(t *testing.T) {

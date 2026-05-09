@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
+	approvalruntime "github.com/wanpengxie/go-kimi/pkg/kimi/approval"
 )
 
 func TestApprovalStateRequestYolo(t *testing.T) {

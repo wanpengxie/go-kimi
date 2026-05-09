@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/subagents"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/subagents"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 func TestBackgroundTaskManagerCreateBashTaskCompleted(t *testing.T) {

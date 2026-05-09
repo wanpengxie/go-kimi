@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/subagents"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/subagents"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 func TestToolExecuteForeground(t *testing.T) {

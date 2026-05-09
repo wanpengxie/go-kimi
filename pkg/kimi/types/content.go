@@ -62,28 +62,39 @@ func (p *TextPart) UnmarshalJSON(data []byte) error {
 }
 
 // ThinkPart carries internal reasoning text.
+//
+// Signature carries the encrypted thinking proof Anthropic-style providers
+// attach to thinking blocks (DeepSeek's anthropic-compat endpoint sets it
+// too). It MUST be round-tripped verbatim into next-turn requests when
+// present; otherwise the provider rejects the request with errors like
+// "content[].thinking in the thinking mode must be passed back to the API"
+// (DeepSeek) or 400 invalid_request_error (Anthropic).
 type ThinkPart struct {
-	Think string `json:"think"`
+	Think     string `json:"think"`
+	Signature string `json:"signature,omitempty"`
 }
 
 func (ThinkPart) isContentPart() {}
 
 func (p ThinkPart) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type  ContentPartType `json:"type"`
-		Think string          `json:"think"`
+		Type      ContentPartType `json:"type"`
+		Think     string          `json:"think"`
+		Signature string          `json:"signature,omitempty"`
 	}
 
 	return json.Marshal(wire{
-		Type:  ContentPartTypeThink,
-		Think: p.Think,
+		Type:      ContentPartTypeThink,
+		Think:     p.Think,
+		Signature: p.Signature,
 	})
 }
 
 func (p *ThinkPart) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Type  ContentPartType `json:"type"`
-		Think string          `json:"think"`
+		Type      ContentPartType `json:"type"`
+		Think     string          `json:"think"`
+		Signature string          `json:"signature"`
 	}
 
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -93,6 +104,7 @@ func (p *ThinkPart) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("think part: unexpected type %q", raw.Type)
 	}
 	p.Think = raw.Think
+	p.Signature = raw.Signature
 	return nil
 }
 
@@ -850,27 +862,36 @@ func UnmarshalDisplayBlock(data []byte) (DisplayBlock, error) {
 	}
 }
 
-// TokenUsage captures token usage counters.
+// TokenUsage captures token usage counters. Cache-related counters surface
+// the Anthropic-style prompt-cache hit/miss split (also returned verbatim by
+// DeepSeek's anthropic-compat endpoint), so multi-turn callers can measure
+// effective cost / cache-hit ratio without re-parsing wire payloads.
 type TokenUsage struct {
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
-	TotalTokens  int `json:"total_tokens,omitempty"`
+	InputTokens              int `json:"input_tokens,omitempty"`
+	OutputTokens             int `json:"output_tokens,omitempty"`
+	TotalTokens              int `json:"total_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 func (u TokenUsage) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		InputTokens  int `json:"input_tokens,omitempty"`
-		OutputTokens int `json:"output_tokens,omitempty"`
-		TotalTokens  int `json:"total_tokens,omitempty"`
+		InputTokens              int `json:"input_tokens,omitempty"`
+		OutputTokens             int `json:"output_tokens,omitempty"`
+		TotalTokens              int `json:"total_tokens,omitempty"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	}
 	return json.Marshal(wire(u))
 }
 
 func (u *TokenUsage) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-		TotalTokens  int `json:"total_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		TotalTokens              int `json:"total_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -878,5 +899,7 @@ func (u *TokenUsage) UnmarshalJSON(data []byte) error {
 	u.InputTokens = raw.InputTokens
 	u.OutputTokens = raw.OutputTokens
 	u.TotalTokens = raw.TotalTokens
+	u.CacheCreationInputTokens = raw.CacheCreationInputTokens
+	u.CacheReadInputTokens = raw.CacheReadInputTokens
 	return nil
 }

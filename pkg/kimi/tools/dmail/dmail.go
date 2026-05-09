@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	toolparams "github.com/wanpengxie/go-kimi/pkg/kimi/tools/internal/params"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 const (

@@ -1,6 +1,6 @@
 package wire
 
-import "github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+import "github.com/wanpengxie/go-kimi/pkg/kimi/types"
 
 // WireMessageType identifies the concrete message variant carried by an envelope.
 type WireMessageType string

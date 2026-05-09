@@ -15,14 +15,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	approvalruntime "github.com/xiewanpeng/go-kimi/pkg/kimi/approval"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/plan"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/web"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	approvalruntime "github.com/wanpengxie/go-kimi/pkg/kimi/approval"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools/plan"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools/web"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestScriptedApprovalRuntimeLifecycle(t *testing.T) {

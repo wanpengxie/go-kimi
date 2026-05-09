@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	toolparams "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/internal/params"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	toolparams "github.com/wanpengxie/go-kimi/pkg/kimi/tools/internal/params"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 	xhtml "golang.org/x/net/html"
 )
 

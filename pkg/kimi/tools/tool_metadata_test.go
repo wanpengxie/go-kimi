@@ -5,15 +5,15 @@ import (
 	"strings"
 	"testing"
 
-	agenttool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/agent"
-	bgtools "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/background"
-	dmailtool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/dmail"
-	filetool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/file"
-	plantool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/plan"
-	questiontool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/question"
-	shelltool "github.com/xiewanpeng/go-kimi/pkg/kimi/tools/shell"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools/think"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	agenttool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/agent"
+	bgtools "github.com/wanpengxie/go-kimi/pkg/kimi/tools/background"
+	dmailtool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/dmail"
+	filetool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/file"
+	plantool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/plan"
+	questiontool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/question"
+	shelltool "github.com/wanpengxie/go-kimi/pkg/kimi/tools/shell"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools/think"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 type metadataTool interface {

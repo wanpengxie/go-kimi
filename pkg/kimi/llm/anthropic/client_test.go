@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 func TestNewAnthropicClientDefaultsAndFromConfig(t *testing.T) {
@@ -217,21 +216,21 @@ func TestAnthropicClientChatRequestEncodesSystemToolResultAndAssistantToolUse(t 
 		if assistant.Role != "assistant" {
 			t.Fatalf("assistant role = %q, want assistant", assistant.Role)
 		}
-		if len(assistant.Content) != 2 {
-			t.Fatalf("assistant content blocks = %d, want 2", len(assistant.Content))
+		// 3 blocks: thinking + text + tool_use. The thinking block MUST
+		// round-trip back to the API — DeepSeek's anthropic-compat
+		// endpoint and upstream Anthropic both reject requests where a
+		// historical assistant turn loses its thinking block.
+		if len(assistant.Content) != 3 {
+			t.Fatalf("assistant content blocks = %d, want 3 (thinking+text+tool_use): %#v", len(assistant.Content), assistant.Content)
 		}
-		if assistant.Content[0].Type != "text" || assistant.Content[0].Text != "working" {
-			t.Fatalf("assistant content[0] = %#v, want text working", assistant.Content[0])
+		if assistant.Content[0].Type != "thinking" || assistant.Content[0].Thinking != "internal thought" {
+			t.Fatalf("assistant content[0] = %#v, want thinking 'internal thought'", assistant.Content[0])
 		}
-		if assistant.Content[1].Type != "tool_use" || assistant.Content[1].ID != "call-1" || assistant.Content[1].Name != "search" {
-			t.Fatalf("assistant content[1] = %#v, want tool_use call-1/search", assistant.Content[1])
+		if assistant.Content[1].Type != "text" || assistant.Content[1].Text != "working" {
+			t.Fatalf("assistant content[1] = %#v, want text working", assistant.Content[1])
 		}
-		assistantJSON, err := json.Marshal(assistant.Content)
-		if err != nil {
-			t.Fatalf("marshal assistant content: %v", err)
-		}
-		if strings.Contains(string(assistantJSON), "\"thinking\"") {
-			t.Fatalf("assistant content should not include thinking part: %s", assistantJSON)
+		if assistant.Content[2].Type != "tool_use" || assistant.Content[2].ID != "call-1" || assistant.Content[2].Name != "search" {
+			t.Fatalf("assistant content[2] = %#v, want tool_use call-1/search", assistant.Content[2])
 		}
 
 		toolResult := req.Messages[2]

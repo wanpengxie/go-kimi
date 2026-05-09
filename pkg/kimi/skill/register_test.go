@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xiewanpeng/go-kimi/internal/soul"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	skillflow "github.com/xiewanpeng/go-kimi/pkg/kimi/skill/flow"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	"github.com/wanpengxie/go-kimi/internal/soul"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	skillflow "github.com/wanpengxie/go-kimi/pkg/kimi/skill/flow"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 func TestRegisterSkillsRunsThroughSoulExecutionPath(t *testing.T) {

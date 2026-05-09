@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	corebg "github.com/xiewanpeng/go-kimi/pkg/kimi/background"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/tools"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	corebg "github.com/wanpengxie/go-kimi/pkg/kimi/background"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/tools"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 )
 
 func TestShellExecuteSuccess(t *testing.T) {

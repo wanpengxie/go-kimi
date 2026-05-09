@@ -17,6 +17,28 @@ var (
 	ErrRunCancelled     = stdErrors.New("kimi: run cancelled")
 	ErrLLMNotConfigured = stdErrors.New("kimi: llm not configured")
 	ErrStepFailed       = stdErrors.New("kimi: step failed")
+
+	// ErrBackendDisconnected is the canonical sentinel a SandboxBackend
+	// returns (via fmt.Errorf("...: %w", ErrBackendDisconnected, ...))
+	// when the backend has lost its execution substrate permanently —
+	// e.g. a remote sandbox WebSocket disconnected, an SSH session
+	// closed, the docker container died and we cannot reprovision
+	// automatically.
+	//
+	// The Soul.Run loop short-circuits as soon as it sees an error chain
+	// containing this sentinel and returns the wrapped error verbatim.
+	// Tools are NOT given a chance to package this into a tool_result for
+	// the LLM (which is the default behaviour for any other error coming
+	// out of a tool's Execute) — feeding it to the model just produces a
+	// retry storm because the LLM has no action that can revive a dead
+	// substrate.
+	//
+	// Lives in this package (instead of pkg/kimi/tools/sandbox where the
+	// SandboxBackend interface is defined) purely to avoid an import cycle
+	// between internal/soul and tools/sandbox; the sandbox package
+	// re-exports it as sandbox.ErrBackendDisconnected so users still
+	// reference it from the package that conceptually owns it.
+	ErrBackendDisconnected = stdErrors.New("kimi: backend disconnected")
 )
 
 // ConfigError describes one invalid config field/value error.

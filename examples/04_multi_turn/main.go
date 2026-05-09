@@ -4,17 +4,17 @@
 package main
 
 import (
-	_ "github.com/xiewanpeng/go-kimi/pkg/kimi/llm/openai"
+	_ "github.com/wanpengxie/go-kimi/pkg/kimi/llm/openai"
 	"context"
 	"fmt"
 	"os"
 	"strings"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
 	"time"
 
-	kimi "github.com/xiewanpeng/go-kimi/pkg/kimi"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+	kimi "github.com/wanpengxie/go-kimi/pkg/kimi"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
 )
 
 func main() {

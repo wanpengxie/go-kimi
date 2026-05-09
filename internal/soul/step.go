@@ -12,9 +12,10 @@ import (
 	"sync"
 	"text/template"
 
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/types"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/wire"
+	kimierrors "github.com/wanpengxie/go-kimi/pkg/kimi/errors"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/types"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/wire"
 )
 
 var errToolsAlreadyExecuted = errors.New("soul step: tools already executed")
@@ -86,6 +87,12 @@ func (s *Soul) executeTools(ctx context.Context, toolCalls []types.ToolCall) ([]
 	}
 
 	results := make([]types.ToolResult, len(toolCalls))
+	// terminalErrs accumulates sentinel errors that must short-circuit the
+	// entire run loop (see sandbox.ErrBackendDisconnected). They are
+	// collected from concurrent tool goroutines under a mutex; we surface
+	// the first one wrapped with the failing tool's name for diagnostics.
+	var terminalErr error
+	var terminalMu sync.Mutex
 	var wg sync.WaitGroup
 	for i := range toolCalls {
 		call := toolCalls[i]
@@ -106,10 +113,31 @@ func (s *Soul) executeTools(ctx context.Context, toolCalls []types.ToolCall) ([]
 				return
 			}
 
-			results[idx] = s.executeOneTool(ctx, toolCall)
+			result, err := s.executeOneTool(ctx, toolCall)
+			if err != nil {
+				// Terminal sentinel: do NOT feed this back to the LLM.
+				// We still set a placeholder result so the slice is not
+				// nil-padded (the result is discarded — the caller exits
+				// the loop before any of these reach the model).
+				terminalMu.Lock()
+				if terminalErr == nil {
+					terminalErr = fmt.Errorf("tool %q: %w", toolCall.Name, err)
+				}
+				terminalMu.Unlock()
+				results[idx] = toolErrorResult(toolCall, err.Error())
+				return
+			}
+			results[idx] = result
 		}(i, call)
 	}
 	wg.Wait()
+
+	// Short-circuit the entire run before emitting results: any sentinel
+	// terminal error means there is no point telling the LLM about
+	// individual tool outcomes — the substrate is gone.
+	if terminalErr != nil {
+		return nil, terminalErr
+	}
 
 	for i := range results {
 		if err := s.emit(wire.ToolCallResult{
@@ -123,15 +151,27 @@ func (s *Soul) executeTools(ctx context.Context, toolCalls []types.ToolCall) ([]
 	return results, nil
 }
 
-func (s *Soul) executeOneTool(ctx context.Context, call types.ToolCall) types.ToolResult {
+// executeOneTool dispatches one tool call. It returns a non-nil error only
+// for terminal conditions that the caller MUST propagate up the run loop —
+// today that means an error chain containing sandbox.ErrBackendDisconnected.
+// All other tool failures (schema, handler error, transient transport blip
+// the backend wants to surface to the model, …) are encoded as ToolResult
+// with IsError=true so the LLM can react.
+func (s *Soul) executeOneTool(ctx context.Context, call types.ToolCall) (types.ToolResult, error) {
 	executor, ok := s.lookupExecutor(call.Name)
 	if !ok {
-		return toolErrorResult(call, fmt.Sprintf("tool executor not found: %s", call.Name))
+		return toolErrorResult(call, fmt.Sprintf("tool executor not found: %s", call.Name)), nil
 	}
 
 	result, err := executor.Execute(ctx, call)
 	if err != nil {
-		return toolErrorResult(call, err.Error())
+		// Terminal sentinel — short-circuit, do NOT package into a
+		// tool_result. The LLM cannot recover from this and feeding it
+		// the error just produces wasted retry loops.
+		if errors.Is(err, kimierrors.ErrBackendDisconnected) {
+			return types.ToolResult{}, err
+		}
+		return toolErrorResult(call, err.Error()), nil
 	}
 
 	result.ToolCallID = strings.TrimSpace(result.ToolCallID)
@@ -142,7 +182,7 @@ func (s *Soul) executeOneTool(ctx context.Context, call types.ToolCall) types.To
 	if result.Name == "" {
 		result.Name = call.Name
 	}
-	return result
+	return result, nil
 }
 
 func (s *Soul) requestToolApproval(ctx context.Context, call types.ToolCall) (bool, string) {

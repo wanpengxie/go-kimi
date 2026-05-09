@@ -1,6 +1,6 @@
 package openai
 
-import "github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+import "github.com/wanpengxie/go-kimi/pkg/kimi/llm"
 
 func init() {
 	llm.RegisterProviderConstructor(llm.ProviderTypeOpenAI, newProviderFromFactoryConfig)

@@ -10,10 +10,10 @@ import (
 	"os"
 	"time"
 
-	kimi "github.com/xiewanpeng/go-kimi/pkg/kimi"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/config"
-	kimierrors "github.com/xiewanpeng/go-kimi/pkg/kimi/errors"
-	"github.com/xiewanpeng/go-kimi/pkg/kimi/llm"
+	kimi "github.com/wanpengxie/go-kimi/pkg/kimi"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/config"
+	kimierrors "github.com/wanpengxie/go-kimi/pkg/kimi/errors"
+	"github.com/wanpengxie/go-kimi/pkg/kimi/llm"
 )
 
 func main() {
