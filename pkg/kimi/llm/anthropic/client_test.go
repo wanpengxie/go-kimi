@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -521,3 +522,225 @@ func (e retryableTransportError) Timeout() bool {
 func (e retryableTransportError) Temporary() bool {
 	return true
 }
+
+// TestMessageContentBlockThinkingAlwaysEmitsThinkingField guards the
+// long-conversation 400 regression: DeepSeek's anthropic-compat endpoint
+// (and upstream Anthropic) reject requests where a historical thinking
+// block in `messages[N].content` lacks the `thinking` field. The wire
+// schema requires the field to be present even when its value is the
+// empty string, so messageContentBlock MUST always emit it for thinking
+// blocks regardless of `omitempty`.
+func TestMessageContentBlockThinkingAlwaysEmitsThinkingField(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		block messageContentBlock
+	}{
+		{
+			name: "non-empty think + signature",
+			block: messageContentBlock{
+				Type:      "thinking",
+				Thinking:  "plan",
+				Signature: "sig-xyz",
+			},
+		},
+		{
+			name: "empty think + non-empty signature",
+			block: messageContentBlock{
+				Type:      "thinking",
+				Thinking:  "",
+				Signature: "sig-xyz",
+			},
+		},
+		{
+			name: "non-empty think + empty signature",
+			block: messageContentBlock{
+				Type:      "thinking",
+				Thinking:  "plan",
+				Signature: "",
+			},
+		},
+		{
+			name: "both empty (degenerate but allowed)",
+			block: messageContentBlock{
+				Type:      "thinking",
+				Thinking:  "",
+				Signature: "",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			data, err := json.Marshal(tc.block)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var generic map[string]any
+			if err := json.Unmarshal(data, &generic); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if generic["type"] != "thinking" {
+				t.Fatalf("type = %v, want thinking; payload=%s", generic["type"], string(data))
+			}
+			if _, ok := generic["thinking"]; !ok {
+				t.Fatalf("thinking field missing in payload=%s", string(data))
+			}
+			if _, ok := generic["signature"]; !ok {
+				t.Fatalf("signature field missing in payload=%s", string(data))
+			}
+			if generic["thinking"] != tc.block.Thinking {
+				t.Fatalf("thinking = %v, want %q", generic["thinking"], tc.block.Thinking)
+			}
+			if generic["signature"] != tc.block.Signature {
+				t.Fatalf("signature = %v, want %q", generic["signature"], tc.block.Signature)
+			}
+			// Tool-use / tool_result fields must NOT leak into thinking blocks.
+			for _, forbidden := range []string{"id", "name", "input", "tool_use_id", "content", "is_error", "text"} {
+				if _, ok := generic[forbidden]; ok {
+					t.Fatalf("thinking block leaked field %q in payload=%s", forbidden, string(data))
+				}
+			}
+		})
+	}
+}
+
+// TestMessageContentBlockNonThinkingPreservesOmitempty makes sure the
+// custom marshaler only changes thinking-block behavior; for text / tool_use
+// blocks the omitempty semantics on Thinking/Signature MUST still drop empty
+// values so we don't pollute every block with `"thinking":""`.
+func TestMessageContentBlockNonThinkingPreservesOmitempty(t *testing.T) {
+	t.Parallel()
+
+	textBlock := messageContentBlock{Type: "text", Text: "hello"}
+	data, err := json.Marshal(textBlock)
+	if err != nil {
+		t.Fatalf("marshal text: %v", err)
+	}
+	var generic map[string]any
+	if err := json.Unmarshal(data, &generic); err != nil {
+		t.Fatalf("unmarshal text: %v", err)
+	}
+	if _, ok := generic["thinking"]; ok {
+		t.Fatalf("text block leaked thinking field: %s", string(data))
+	}
+	if _, ok := generic["signature"]; ok {
+		t.Fatalf("text block leaked signature field: %s", string(data))
+	}
+	if generic["text"] != "hello" {
+		t.Fatalf("text = %v, want hello", generic["text"])
+	}
+
+	toolBlock := messageContentBlock{
+		Type:  "tool_use",
+		ID:    "call-1",
+		Name:  "search",
+		Input: map[string]any{"q": "x"},
+	}
+	data, err = json.Marshal(toolBlock)
+	if err != nil {
+		t.Fatalf("marshal tool_use: %v", err)
+	}
+	generic = nil
+	if err := json.Unmarshal(data, &generic); err != nil {
+		t.Fatalf("unmarshal tool_use: %v", err)
+	}
+	if _, ok := generic["thinking"]; ok {
+		t.Fatalf("tool_use block leaked thinking field: %s", string(data))
+	}
+	if _, ok := generic["signature"]; ok {
+		t.Fatalf("tool_use block leaked signature field: %s", string(data))
+	}
+}
+
+// TestAnthropicClientChatLongConversationThinkingFieldsPreserved simulates
+// the multi-step long-conversation regression at the request-build level:
+// 10+ assistant turns each containing a ThinkPart (some with empty Think
+// text and only a Signature, simulating partial reconstruction) get
+// serialized into the request body and the wire payload MUST contain a
+// `thinking` field on every thinking block — DeepSeek's anthropic-compat
+// endpoint hard-rejects requests where any historical thinking block has
+// dropped that field.
+func TestAnthropicClientChatLongConversationThinkingFieldsPreserved(t *testing.T) {
+	t.Parallel()
+
+	var capturedRaw []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		capturedRaw = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}`))
+	}))
+	defer server.Close()
+
+	// Build 12 assistant messages alternating ThinkPart shapes:
+	//   - even index: full Think + Signature (normal streaming output)
+	//   - odd  index: empty Think but non-empty Signature (the bug case
+	//     — happens when reconstruction loses the thinking text but
+	//     keeps the signature, or when the model emitted only signature)
+	messages := []llm.Message{
+		{Role: "system", Content: types.ContentParts{types.TextPart{Text: "be helpful"}}},
+		{Role: "user", Content: types.ContentParts{types.TextPart{Text: "go"}}},
+	}
+	for i := 0; i < 12; i++ {
+		var think string
+		if i%2 == 0 {
+			think = fmt.Sprintf("thought-%d", i)
+		}
+		messages = append(messages, llm.Message{
+			Role: "assistant",
+			Content: types.ContentParts{
+				types.ThinkPart{Think: think, Signature: fmt.Sprintf("sig-%d", i)},
+				types.TextPart{Text: fmt.Sprintf("step-%d", i)},
+			},
+		})
+		messages = append(messages, llm.Message{
+			Role:    "user",
+			Content: types.ContentParts{types.TextPart{Text: fmt.Sprintf("next-%d", i)}},
+		})
+	}
+
+	client := NewAnthropicClient("test-key", server.URL, "claude-3-5-haiku")
+	if _, err := client.Chat(context.Background(), llm.ChatRequest{Messages: messages}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	// Decode the captured wire payload as a generic map so we can verify
+	// raw field presence (default struct decoding would silently fill in
+	// zero-valued strings and hide the bug).
+	var raw struct {
+		Messages []struct {
+			Role    string                   `json:"role"`
+			Content []map[string]interface{} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedRaw, &raw); err != nil {
+		t.Fatalf("decode raw payload: %v\npayload=%s", err, string(capturedRaw))
+	}
+
+	thinkingBlockCount := 0
+	for mi, m := range raw.Messages {
+		for ci, block := range m.Content {
+			if block["type"] != "thinking" {
+				continue
+			}
+			thinkingBlockCount++
+			if _, ok := block["thinking"]; !ok {
+				t.Fatalf("messages[%d].content[%d]: missing field `thinking`; block=%v", mi, ci, block)
+			}
+			if _, ok := block["signature"]; !ok {
+				t.Fatalf("messages[%d].content[%d]: missing field `signature`; block=%v", mi, ci, block)
+			}
+		}
+	}
+	if thinkingBlockCount != 12 {
+		t.Fatalf("thinking blocks in payload = %d, want 12", thinkingBlockCount)
+	}
+}
+

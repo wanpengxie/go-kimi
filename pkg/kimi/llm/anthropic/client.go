@@ -1005,6 +1005,42 @@ type messageContentBlock struct {
 	IsError   bool           `json:"is_error,omitempty"`
 }
 
+// MarshalJSON ensures that thinking blocks ALWAYS carry the `thinking` and
+// `signature` fields on the wire, even when their values are empty strings.
+//
+// Why this matters: Anthropic's messages API (and DeepSeek's anthropic-compat
+// endpoint) require thinking blocks in request bodies to include both fields
+// verbatim. Once an assistant turn containing a thinking block is appended
+// back into the next-step prompt history, ANY missing field triggers a
+// hard 400, e.g.:
+//
+//	"messages[17].content: missing field `thinking`"
+//
+// The default struct tags (`omitempty` on Thinking/Signature) drop empty
+// values, which is correct for non-thinking block types (text/tool_use/...)
+// but wrong for thinking blocks where the schema requires the fields to be
+// present. Custom marshaling lets thinking blocks always emit the two fields
+// while keeping `omitempty` semantics for all other block types.
+func (b messageContentBlock) MarshalJSON() ([]byte, error) {
+	type alias messageContentBlock
+	if b.Type == "thinking" {
+		// Thinking blocks: always emit `thinking` and `signature` (no
+		// omitempty), and drop the unrelated tool_use/tool_result fields
+		// to keep the wire payload clean.
+		wire := struct {
+			Type      string `json:"type"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
+		}{
+			Type:      b.Type,
+			Thinking:  b.Thinking,
+			Signature: b.Signature,
+		}
+		return json.Marshal(wire)
+	}
+	return json.Marshal(alias(b))
+}
+
 type messageTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
