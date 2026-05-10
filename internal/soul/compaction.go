@@ -14,8 +14,14 @@ import (
 
 const (
 	defaultCompactionTriggerRatio = 0.8
-	defaultCompactionMaxContext   = 128000
-	defaultCompactionReserved     = 4096
+	// 1M default matches DeepSeek-V4 / Claude long-context tier; legacy
+	// 128K tuned for older models forced auto-compaction at ~102K
+	// (= 128000 * 0.8) even when the underlying provider could happily
+	// carry 10x that. Multi-model awareness (per-provider context window
+	// lookup) deferred — 1M is a safe upper bound that no current
+	// provider is far below.
+	defaultCompactionMaxContext = 1000000
+	defaultCompactionReserved   = 4096
 	defaultPreserveLastNRounds    = 2
 	defaultCompactionInstruction  = "Summarize the conversation history faithfully. Keep key facts, decisions, constraints, unresolved tasks, and user preferences. Be concise and do not invent details."
 )
