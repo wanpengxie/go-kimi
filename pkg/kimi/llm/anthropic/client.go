@@ -617,6 +617,15 @@ func encodeRegularContent(parts types.ContentParts) []messageContentBlock {
 		return nil
 	}
 
+	// Collapse adjacent TextPart runs so chunked streaming output (one
+	// TextDelta per token) does not encode into N separate content_block
+	// entries on the wire. Providers that observe that pattern in history
+	// will mimic it on the next turn, locking the session into a chunked
+	// self-perpetuating state. ThinkPart / tool_use / media parts are
+	// intentionally left as separate blocks (Anthropic and DeepSeek require
+	// thinking blocks to round-trip verbatim with their Signature).
+	parts = types.CollapseAdjacentTextParts(parts)
+
 	content := make([]messageContentBlock, 0, len(parts))
 	for i := range parts {
 		switch typed := parts[i].(type) {

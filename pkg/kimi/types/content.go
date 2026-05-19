@@ -246,6 +246,70 @@ func (p *ContentParts) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// CollapseAdjacentTextParts merges runs of consecutive TextPart entries into
+// single TextPart elements while leaving every other content part (Think,
+// ImageURL, AudioURL, VideoURL, …) untouched and in original order.
+//
+// Background — streaming providers that emit one TextDelta per token used to
+// be replayed by go-kimi as N independent TextPart elements in
+// Message.Content. The next turn's request then encoded those into N separate
+// content_block entries; the LLM mimicked the format and replied with even
+// more chunks, locking the session into a self-perpetuating chunked state
+// (see hub.mergeTurnOutput, anthropic.encodeRegularContent, soul.step). This
+// helper is the canonical collapse used by every layer that touches an
+// in-memory ContentParts slice.
+//
+// Empty TextPart entries (Text == "") are dropped. Thinking blocks are never
+// merged with each other or with text — they must round-trip with their
+// Signature intact (see ThinkPart godoc).
+func CollapseAdjacentTextParts(parts ContentParts) ContentParts {
+	if len(parts) == 0 {
+		return parts
+	}
+
+	out := make(ContentParts, 0, len(parts))
+	var pending *TextPart
+	flush := func() {
+		if pending == nil {
+			return
+		}
+		if pending.Text != "" {
+			out = append(out, *pending)
+		}
+		pending = nil
+	}
+
+	for i := range parts {
+		switch typed := parts[i].(type) {
+		case TextPart:
+			if typed.Text == "" {
+				continue
+			}
+			if pending == nil {
+				copy := typed
+				pending = &copy
+			} else {
+				pending.Text += typed.Text
+			}
+		case *TextPart:
+			if typed == nil || typed.Text == "" {
+				continue
+			}
+			if pending == nil {
+				copy := *typed
+				pending = &copy
+			} else {
+				pending.Text += typed.Text
+			}
+		default:
+			flush()
+			out = append(out, parts[i])
+		}
+	}
+	flush()
+	return out
+}
+
 // MarshalContentPart marshals a polymorphic content part.
 func MarshalContentPart(part ContentPart) ([]byte, error) {
 	if part == nil {

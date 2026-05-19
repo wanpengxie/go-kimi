@@ -289,3 +289,81 @@ func mustReadMergedMessage(t *testing.T, messages <-chan WireMessage) WireMessag
 		return nil
 	}
 }
+
+// TestMergeTurnOutputCollapsesChunkedOutputAlways verifies that
+// mergeTurnOutput collapses adjacent TextPart entries on TurnEnd.Output
+// regardless of whether the provider streamed any text via TextDelta. Some
+// providers (DeepSeek anthropic-compat) double-fill Output with N TextPart
+// entries while also emitting TextDelta; the previous bypass-when-text-
+// present check left those chunks in place and fed the self-perpetuating
+// chunked-content bug.
+func TestMergeTurnOutputCollapsesChunkedOutputAlways(t *testing.T) {
+	t.Parallel()
+
+	chunked := make(types.ContentParts, 0, 64)
+	for i := 0; i < 64; i++ {
+		chunked = append(chunked, types.TextPart{Text: "x"})
+	}
+
+	merged := mergeTurnOutput(chunked, "")
+	if len(merged) != 1 {
+		t.Fatalf("merged length = %d, want 1 (got %#v)", len(merged), merged)
+	}
+	text, ok := merged[0].(types.TextPart)
+	if !ok {
+		t.Fatalf("merged[0] type = %T, want TextPart", merged[0])
+	}
+	if len(text.Text) != 64 || text.Text != strings.Repeat("x", 64) {
+		t.Fatalf("merged[0].Text len = %d, want 64 x's", len(text.Text))
+	}
+}
+
+// TestMergeTurnOutputCollapsesAroundThinkingBlocks ensures the merger
+// preserves a ThinkPart inserted between chunked text runs.
+func TestMergeTurnOutputCollapsesAroundThinkingBlocks(t *testing.T) {
+	t.Parallel()
+
+	output := types.ContentParts{
+		types.TextPart{Text: "pre"},
+		types.TextPart{Text: "amble "},
+		types.ThinkPart{Think: "reason", Signature: "sig"},
+		types.TextPart{Text: "post"},
+		types.TextPart{Text: "amble"},
+	}
+
+	merged := mergeTurnOutput(output, "")
+	if len(merged) != 3 {
+		t.Fatalf("merged length = %d, want 3 (text, think, text)", len(merged))
+	}
+	if text, ok := merged[0].(types.TextPart); !ok || text.Text != "preamble " {
+		t.Fatalf("merged[0] = %#v, want text{preamble }", merged[0])
+	}
+	if think, ok := merged[1].(types.ThinkPart); !ok || think.Signature != "sig" {
+		t.Fatalf("merged[1] = %#v, want think{signature preserved}", merged[1])
+	}
+	if text, ok := merged[2].(types.TextPart); !ok || text.Text != "postamble" {
+		t.Fatalf("merged[2] = %#v, want text{postamble}", merged[2])
+	}
+}
+
+// TestMergeTurnOutputFallsBackToStreamMergedText keeps the original
+// behaviour: if the provider emitted no text into Output but streamed
+// tokens via TextDelta, the stream-merged accumulator is appended.
+func TestMergeTurnOutputFallsBackToStreamMergedText(t *testing.T) {
+	t.Parallel()
+
+	output := types.ContentParts{
+		types.ThinkPart{Think: "reasoning"},
+	}
+
+	merged := mergeTurnOutput(output, " hello world ")
+	if len(merged) != 2 {
+		t.Fatalf("merged length = %d, want 2 (think, text)", len(merged))
+	}
+	if _, ok := merged[0].(types.ThinkPart); !ok {
+		t.Fatalf("merged[0] = %#v, want ThinkPart", merged[0])
+	}
+	if text, ok := merged[1].(types.TextPart); !ok || text.Text != "hello world" {
+		t.Fatalf("merged[1] = %#v, want trimmed TextPart", merged[1])
+	}
+}

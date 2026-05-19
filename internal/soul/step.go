@@ -51,7 +51,7 @@ func (s *Soul) step(ctx context.Context, turnID string) (StepResult, error) {
 			return StepResult{}, fmt.Errorf("soul step: stream event: %w", event.Err)
 		}
 		if event.Delta != nil {
-			result.Content = append(result.Content, event.Delta)
+			result.Content = appendContentPartCollapsing(result.Content, event.Delta)
 			if textDelta := textFromContentPart(event.Delta); textDelta != "" {
 				if err := s.emit(wire.TextDelta{
 					TurnID: turnID,
@@ -311,6 +311,7 @@ func normalizeHistory(history []Message) []Message {
 	out := make([]Message, 0, len(history))
 	for i := range history {
 		current := cloneMessage(history[i])
+		current.Content = types.CollapseAdjacentTextParts(current.Content)
 		if len(out) == 0 {
 			out = append(out, current)
 			continue
@@ -322,10 +323,57 @@ func normalizeHistory(history []Message) []Message {
 			continue
 		}
 
-		last.Content = append(cloneContentParts(last.Content), cloneContentParts(current.Content)...)
+		merged := append(cloneContentParts(last.Content), cloneContentParts(current.Content)...)
+		last.Content = types.CollapseAdjacentTextParts(merged)
 		last.ToolCalls = append(cloneToolCalls(last.ToolCalls), cloneToolCalls(current.ToolCalls)...)
 	}
 	return out
+}
+
+// appendContentPartCollapsing appends a streamed content part to a partial
+// step result, collapsing it into the previous TextPart when both are
+// TextParts. This is the in-stream defense against chunked TextDelta output
+// (one TextPart per token) snowballing into 343-element ContentParts. Non-
+// text deltas (ThinkPart, ImageURLPart, …) always append as separate
+// elements so signatures and media URIs round-trip unchanged.
+func appendContentPartCollapsing(content types.ContentParts, delta types.ContentPart) types.ContentParts {
+	if delta == nil {
+		return content
+	}
+
+	var deltaText string
+	var deltaIsText bool
+	switch typed := delta.(type) {
+	case types.TextPart:
+		deltaText = typed.Text
+		deltaIsText = true
+	case *types.TextPart:
+		if typed != nil {
+			deltaText = typed.Text
+			deltaIsText = true
+		}
+	}
+
+	if deltaIsText {
+		if deltaText == "" {
+			return content
+		}
+		if n := len(content); n > 0 {
+			switch last := content[n-1].(type) {
+			case types.TextPart:
+				content[n-1] = types.TextPart{Text: last.Text + deltaText}
+				return content
+			case *types.TextPart:
+				if last != nil {
+					content[n-1] = types.TextPart{Text: last.Text + deltaText}
+					return content
+				}
+			}
+		}
+		return append(content, types.TextPart{Text: deltaText})
+	}
+
+	return append(content, delta)
 }
 
 func canMergeMessages(left, right Message) bool {

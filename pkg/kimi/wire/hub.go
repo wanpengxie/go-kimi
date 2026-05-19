@@ -246,7 +246,24 @@ func (s *MergingSubscriber) emit(message WireMessage) bool {
 	}
 }
 
+// mergeTurnOutput finalizes the TurnEnd.Output slice the merging subscriber
+// emits downstream. It always collapses runs of adjacent TextPart entries
+// (so providers that double-fill the Output array with one TextPart per
+// streamed token cannot leak that chunking through the wire pipeline) and
+// only falls back to the merged TextDelta accumulator when the provider
+// emitted no text into Output at all.
+//
+// The previous implementation bypassed the merge when Output already
+// contained at least one TextPart. That was safe for providers that strictly
+// separated streaming text (TextDelta) from non-text output (ThinkPart /
+// ToolCall), but it left chunked text in place when a provider — e.g.
+// DeepSeek's anthropic-compat endpoint — populated Output with N TextPart
+// entries in addition to streaming the same tokens via TextDelta. Those
+// chunks then survived round-trip into context.jsonl and fed the
+// self-perpetuating chunked-content bug.
 func mergeTurnOutput(output types.ContentParts, mergedText string) types.ContentParts {
+	output = types.CollapseAdjacentTextParts(output)
+
 	mergedText = strings.TrimSpace(mergedText)
 	if mergedText == "" {
 		return output

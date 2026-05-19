@@ -48,14 +48,15 @@ func TestNormalizeHistoryMergesAdjacentAssistantMessages(t *testing.T) {
 	if normalized[0].Role != RoleAssistant {
 		t.Fatalf("normalized[0].Role = %q, want assistant", normalized[0].Role)
 	}
-	if len(normalized[0].Content) != 2 {
-		t.Fatalf("normalized content part count = %d, want 2", len(normalized[0].Content))
+	// normalizeHistory now collapses adjacent TextPart runs as a defense
+	// against chunked streaming output snowballing into N-element
+	// ContentParts. Two adjacent assistant text segments collapse into one
+	// TextPart with the concatenated text.
+	if len(normalized[0].Content) != 1 {
+		t.Fatalf("normalized content part count = %d, want 1", len(normalized[0].Content))
 	}
-	if got := textFromContentPart(normalized[0].Content[0]); got != "first" {
-		t.Fatalf("content[0] = %q, want %q", got, "first")
-	}
-	if got := textFromContentPart(normalized[0].Content[1]); got != "second" {
-		t.Fatalf("content[1] = %q, want %q", got, "second")
+	if got := textFromContentPart(normalized[0].Content[0]); got != "firstsecond" {
+		t.Fatalf("content[0] = %q, want %q", got, "firstsecond")
 	}
 	if len(normalized[0].ToolCalls) != 2 {
 		t.Fatalf("normalized tool call count = %d, want 2", len(normalized[0].ToolCalls))
@@ -133,8 +134,14 @@ func TestNormalizeHistoryDoesNotMergeAcrossRoleBoundary(t *testing.T) {
 	if len(normalized) != 3 {
 		t.Fatalf("normalized message count = %d, want 3", len(normalized))
 	}
-	if normalized[0].Role != RoleUser || len(normalized[0].Content) != 2 {
-		t.Fatalf("normalized[0] = %#v, want merged first two user messages", normalized[0])
+	// normalizeHistory now collapses adjacent TextPart runs after merging
+	// same-role messages (defense against chunked streaming output). u1 and
+	// u2 collapse into a single TextPart with text "u1u2".
+	if normalized[0].Role != RoleUser || len(normalized[0].Content) != 1 {
+		t.Fatalf("normalized[0] = %#v, want merged+collapsed first two user messages", normalized[0])
+	}
+	if got := textFromContentPart(normalized[0].Content[0]); got != "u1u2" {
+		t.Fatalf("normalized[0].Content[0] = %q, want %q", got, "u1u2")
 	}
 	if normalized[2].Role != RoleUser || len(normalized[2].Content) != 1 {
 		t.Fatalf("normalized[2] = %#v, want separate trailing user message", normalized[2])

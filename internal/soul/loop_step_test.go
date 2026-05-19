@@ -79,8 +79,14 @@ func TestSoulStepExecutesToolCallsAndEmitsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step() error = %v", err)
 	}
-	if len(result.Content) != 2 {
-		t.Fatalf("len(result.Content) = %d, want 2", len(result.Content))
+	// Chunked TextDeltas ("Hel"+"lo") collapse into a single TextPart at
+	// the result.Content level so context.jsonl is not polluted with
+	// per-token TextPart entries.
+	if len(result.Content) != 1 {
+		t.Fatalf("len(result.Content) = %d, want 1 (collapsed)", len(result.Content))
+	}
+	if text, ok := result.Content[0].(types.TextPart); !ok || text.Text != "Hello" {
+		t.Fatalf("result.Content[0] = %#v, want TextPart{Hello}", result.Content[0])
 	}
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("len(result.ToolCalls) = %d, want 1", len(result.ToolCalls))
@@ -887,8 +893,11 @@ func TestSoulBuildChatMessagesTemplateAndHookNormalization(t *testing.T) {
 	if userMsg.Role != "user" {
 		t.Fatalf("request user role = %q, want user", userMsg.Role)
 	}
-	if len(userMsg.Content) != 2 {
-		t.Fatalf("normalized user content parts = %d, want 2", len(userMsg.Content))
+	// normalizeHistory now collapses adjacent TextPart runs across merged
+	// same-role messages — base + hook user text condense into one
+	// TextPart with both substrings concatenated.
+	if len(userMsg.Content) != 1 {
+		t.Fatalf("normalized user content parts = %d, want 1 (collapsed)", len(userMsg.Content))
 	}
 	if got := contentPartsText(userMsg.Content); !strings.Contains(got, "base input") || !strings.Contains(got, "hook detail") {
 		t.Fatalf("user content = %q, want merged base+hook", got)

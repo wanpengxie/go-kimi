@@ -412,3 +412,118 @@ func TestTokenUsageJSONSnakeCase(t *testing.T) {
 		t.Fatalf("decoded = %#v, want %#v", decoded, usage)
 	}
 }
+
+func TestCollapseAdjacentTextPartsMergesChunkedStream(t *testing.T) {
+	t.Parallel()
+
+	// Simulate one TextDelta per token streamed from a chunked provider.
+	chunks := []string{"He", "llo", ", ", "wor", "ld", "!"}
+	parts := make(ContentParts, 0, len(chunks))
+	for _, chunk := range chunks {
+		parts = append(parts, TextPart{Text: chunk})
+	}
+
+	collapsed := CollapseAdjacentTextParts(parts)
+	if len(collapsed) != 1 {
+		t.Fatalf("collapsed length = %d, want 1", len(collapsed))
+	}
+	text, ok := collapsed[0].(TextPart)
+	if !ok {
+		t.Fatalf("collapsed[0] type = %T, want TextPart", collapsed[0])
+	}
+	if text.Text != "Hello, world!" {
+		t.Fatalf("merged text = %q, want %q", text.Text, "Hello, world!")
+	}
+}
+
+func TestCollapseAdjacentTextPartsPreservesThinkAndToolBoundaries(t *testing.T) {
+	t.Parallel()
+
+	parts := ContentParts{
+		TextPart{Text: "Plan: "},
+		TextPart{Text: "summarize"},
+		ThinkPart{Think: "internal reasoning", Signature: "sig-1"},
+		TextPart{Text: "Final "},
+		TextPart{Text: "answer"},
+		ImageURLPart{ImageURL: "https://example.com/a.png"},
+		TextPart{Text: "after image"},
+	}
+
+	collapsed := CollapseAdjacentTextParts(parts)
+	if len(collapsed) != 5 {
+		t.Fatalf("collapsed length = %d, want 5 (got %#v)", len(collapsed), collapsed)
+	}
+
+	text0, ok := collapsed[0].(TextPart)
+	if !ok || text0.Text != "Plan: summarize" {
+		t.Fatalf("collapsed[0] = %#v, want TextPart{Plan: summarize}", collapsed[0])
+	}
+	think, ok := collapsed[1].(ThinkPart)
+	if !ok || think.Think != "internal reasoning" || think.Signature != "sig-1" {
+		t.Fatalf("collapsed[1] = %#v, want ThinkPart preserved", collapsed[1])
+	}
+	text2, ok := collapsed[2].(TextPart)
+	if !ok || text2.Text != "Final answer" {
+		t.Fatalf("collapsed[2] = %#v, want TextPart{Final answer}", collapsed[2])
+	}
+	image, ok := collapsed[3].(ImageURLPart)
+	if !ok || image.ImageURL != "https://example.com/a.png" {
+		t.Fatalf("collapsed[3] = %#v, want ImageURLPart", collapsed[3])
+	}
+	text4, ok := collapsed[4].(TextPart)
+	if !ok || text4.Text != "after image" {
+		t.Fatalf("collapsed[4] = %#v, want TextPart{after image}", collapsed[4])
+	}
+}
+
+func TestCollapseAdjacentTextPartsDropsEmptyText(t *testing.T) {
+	t.Parallel()
+
+	parts := ContentParts{
+		TextPart{Text: ""},
+		TextPart{Text: "real"},
+		TextPart{Text: ""},
+		ThinkPart{Think: "x", Signature: "s"},
+		TextPart{Text: ""},
+	}
+
+	collapsed := CollapseAdjacentTextParts(parts)
+	if len(collapsed) != 2 {
+		t.Fatalf("collapsed length = %d, want 2 (got %#v)", len(collapsed), collapsed)
+	}
+	if text, ok := collapsed[0].(TextPart); !ok || text.Text != "real" {
+		t.Fatalf("collapsed[0] = %#v, want TextPart{real}", collapsed[0])
+	}
+	if _, ok := collapsed[1].(ThinkPart); !ok {
+		t.Fatalf("collapsed[1] = %#v, want ThinkPart", collapsed[1])
+	}
+}
+
+func TestCollapseAdjacentTextPartsHandlesPointerTextPart(t *testing.T) {
+	t.Parallel()
+
+	parts := ContentParts{
+		&TextPart{Text: "a"},
+		&TextPart{Text: "b"},
+		TextPart{Text: "c"},
+	}
+
+	collapsed := CollapseAdjacentTextParts(parts)
+	if len(collapsed) != 1 {
+		t.Fatalf("collapsed length = %d, want 1", len(collapsed))
+	}
+	if text, ok := collapsed[0].(TextPart); !ok || text.Text != "abc" {
+		t.Fatalf("collapsed[0] = %#v, want TextPart{abc}", collapsed[0])
+	}
+}
+
+func TestCollapseAdjacentTextPartsEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	if got := CollapseAdjacentTextParts(nil); got != nil {
+		t.Fatalf("CollapseAdjacentTextParts(nil) = %#v, want nil", got)
+	}
+	if got := CollapseAdjacentTextParts(ContentParts{}); len(got) != 0 {
+		t.Fatalf("CollapseAdjacentTextParts(empty) length = %d, want 0", len(got))
+	}
+}

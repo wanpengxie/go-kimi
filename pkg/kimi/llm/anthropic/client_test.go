@@ -744,3 +744,86 @@ func TestAnthropicClientChatLongConversationThinkingFieldsPreserved(t *testing.T
 	}
 }
 
+
+// TestEncodeRegularContentCollapsesChunkedTextParts verifies that 343-
+// element TextPart histories (one per streamed token, courtesy of
+// providers that one-shot the chunked stream into Output) are collapsed
+// to a single text content_block before being sent back to the provider.
+// This is the upstream half of the chunked-content self-perpetuation bug;
+// without collapse, the next turn's request mimics the chunked format and
+// the model in-context-learns the pattern.
+func TestEncodeRegularContentCollapsesChunkedTextParts(t *testing.T) {
+	t.Parallel()
+
+	parts := types.ContentParts{}
+	for i := 0; i < 343; i++ {
+		parts = append(parts, types.TextPart{Text: "tok"})
+	}
+
+	blocks := encodeRegularContent(parts)
+	if len(blocks) != 1 {
+		t.Fatalf("encoded block count = %d, want 1 collapsed text block", len(blocks))
+	}
+	if blocks[0].Type != "text" {
+		t.Fatalf("block[0].Type = %q, want text", blocks[0].Type)
+	}
+	want := ""
+	for i := 0; i < 343; i++ {
+		want += "tok"
+	}
+	if blocks[0].Text != want {
+		t.Fatalf("block[0].Text len = %d, want %d", len(blocks[0].Text), len(want))
+	}
+}
+
+// TestEncodeRegularContentPreservesThinkingBoundaries — chunked text
+// around thinking blocks must collapse on both sides without absorbing the
+// thinking block. Thinking signature is preserved verbatim.
+func TestEncodeRegularContentPreservesThinkingBoundaries(t *testing.T) {
+	t.Parallel()
+
+	parts := types.ContentParts{
+		types.TextPart{Text: "Plan "},
+		types.TextPart{Text: "the "},
+		types.TextPart{Text: "task. "},
+		types.ThinkPart{Think: "internal monologue", Signature: "deepseek-sig"},
+		types.TextPart{Text: "Now "},
+		types.TextPart{Text: "execute."},
+	}
+
+	blocks := encodeRegularContent(parts)
+	if len(blocks) != 3 {
+		t.Fatalf("block count = %d, want 3 (text, thinking, text); got %#v", len(blocks), blocks)
+	}
+
+	if blocks[0].Type != "text" || blocks[0].Text != "Plan the task. " {
+		t.Fatalf("block[0] = %+v, want text{Plan the task. }", blocks[0])
+	}
+	if blocks[1].Type != "thinking" || blocks[1].Thinking != "internal monologue" || blocks[1].Signature != "deepseek-sig" {
+		t.Fatalf("block[1] = %+v, want thinking{internal monologue, deepseek-sig}", blocks[1])
+	}
+	if blocks[2].Type != "text" || blocks[2].Text != "Now execute." {
+		t.Fatalf("block[2] = %+v, want text{Now execute.}", blocks[2])
+	}
+}
+
+// TestEncodeRegularContentDropsEmptyTextChunks — empty TextPart entries
+// (e.g. provider sentinel tokens) must not produce empty content_block
+// entries that some providers reject.
+func TestEncodeRegularContentDropsEmptyTextChunks(t *testing.T) {
+	t.Parallel()
+
+	parts := types.ContentParts{
+		types.TextPart{Text: ""},
+		types.TextPart{Text: "real text"},
+		types.TextPart{Text: ""},
+	}
+
+	blocks := encodeRegularContent(parts)
+	if len(blocks) != 1 {
+		t.Fatalf("block count = %d, want 1", len(blocks))
+	}
+	if blocks[0].Text != "real text" {
+		t.Fatalf("block[0].Text = %q, want %q", blocks[0].Text, "real text")
+	}
+}
