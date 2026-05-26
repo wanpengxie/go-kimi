@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	skillflow "github.com/wanpengxie/go-kimi/pkg/kimi/skill/flow"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -53,12 +54,12 @@ func parseSkillMarkdown(dir, markdown string) (*Skill, error) {
 		return nil, err
 	}
 
-	name := strings.TrimSpace(fields["name"])
+	name := strings.TrimSpace(stringField(fields, "name"))
 	if name == "" {
 		return nil, errors.New("skill: frontmatter field name is required")
 	}
 
-	skillType := strings.ToLower(strings.TrimSpace(fields["type"]))
+	skillType := strings.ToLower(strings.TrimSpace(stringField(fields, "type")))
 	if skillType == "" {
 		skillType = standardType
 	}
@@ -77,7 +78,7 @@ func parseSkillMarkdown(dir, markdown string) (*Skill, error) {
 
 	return &Skill{
 		Name:        name,
-		Description: strings.TrimSpace(fields["description"]),
+		Description: strings.TrimSpace(stringField(fields, "description")),
 		Type:        skillType,
 		Dir:         filepath.Clean(strings.TrimSpace(dir)),
 		Content:     body,
@@ -85,7 +86,14 @@ func parseSkillMarkdown(dir, markdown string) (*Skill, error) {
 	}, nil
 }
 
-func parseFrontmatter(markdown string) (map[string]string, string, error) {
+// parseFrontmatter extracts the YAML block delimited by `---` markers at the
+// top of a SKILL.md file and returns the parsed key/value map plus the
+// remaining markdown body.
+//
+// The YAML block is parsed by gopkg.in/yaml.v3, so all standard YAML features
+// are supported, including block scalars (`description: |` followed by
+// indented lines), quoted strings, lists, and nested maps.
+func parseFrontmatter(markdown string) (map[string]any, string, error) {
 	normalized := normalizeMarkdown(markdown)
 	lines := strings.Split(normalized, "\n")
 	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
@@ -103,24 +111,17 @@ func parseFrontmatter(markdown string) (map[string]string, string, error) {
 		return nil, "", errors.New("skill: missing frontmatter closing marker")
 	}
 
-	fields := make(map[string]string, 3)
-	for i := 1; i < closeIdx; i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
+	yamlBlock := strings.Join(lines[1:closeIdx], "\n")
+	raw := make(map[string]any)
+	if strings.TrimSpace(yamlBlock) != "" {
+		if err := yaml.Unmarshal([]byte(yamlBlock), &raw); err != nil {
+			return nil, "", fmt.Errorf("skill: parse frontmatter yaml: %w", err)
 		}
+	}
 
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			return nil, "", fmt.Errorf("skill: invalid frontmatter line %q", line)
-		}
-		key := strings.ToLower(strings.TrimSpace(parts[0]))
-		value := strings.TrimSpace(parts[1])
-
-		switch key {
-		case "name", "description", "type":
-			fields[key] = value
-		}
+	fields := make(map[string]any, len(raw))
+	for key, value := range raw {
+		fields[strings.ToLower(strings.TrimSpace(key))] = value
 	}
 
 	body := ""
@@ -129,6 +130,34 @@ func parseFrontmatter(markdown string) (map[string]string, string, error) {
 	}
 
 	return fields, body, nil
+}
+
+// stringField coerces a value extracted from the frontmatter map into a
+// string. YAML scalars (string / int / float / bool) are stringified; any
+// other shape (sequence, mapping, nil) yields the empty string so callers can
+// rely on the standard `required` checks.
+func stringField(fields map[string]any, key string) string {
+	if fields == nil {
+		return ""
+	}
+	v, ok := fields[key]
+	if !ok || v == nil {
+		return ""
+	}
+	switch typed := v.(type) {
+	case string:
+		return typed
+	case int:
+		return fmt.Sprintf("%d", typed)
+	case int64:
+		return fmt.Sprintf("%d", typed)
+	case float64:
+		return fmt.Sprintf("%g", typed)
+	case bool:
+		return fmt.Sprintf("%t", typed)
+	default:
+		return ""
+	}
 }
 
 func normalizeMarkdown(markdown string) string {

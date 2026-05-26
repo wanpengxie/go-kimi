@@ -238,9 +238,12 @@ Summarize the provided text into concise bullets.
 		t.Fatalf("os.WriteFile(%q) error = %v", skillFile, err)
 	}
 
-	discovered, err := skill.DiscoverSkills(root)
+	discovered, parseErrs, err := skill.DiscoverSkills(root)
 	if err != nil {
 		t.Fatalf("DiscoverSkills() error = %v", err)
+	}
+	if len(parseErrs) != 0 {
+		t.Fatalf("DiscoverSkills() parseErrs = %v, want none", parseErrs)
 	}
 	if len(discovered) != 1 {
 		t.Fatalf("len(discovered) = %d, want 1", len(discovered))

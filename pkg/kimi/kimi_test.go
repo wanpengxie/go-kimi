@@ -23,6 +23,52 @@ func TestVersionIsSet(t *testing.T) {
 	}
 }
 
+// TestResolveSkillRootsNilUsesDefault confirms the historical behaviour: a
+// caller that does not set SkillRoots gets the built-in / user / project
+// triple.
+func TestResolveSkillRootsNilUsesDefault(t *testing.T) {
+	t.Parallel()
+
+	roots := resolveSkillRoots(AgentConfig{}, "/tmp/workspace")
+	if len(roots) == 0 {
+		t.Fatal("resolveSkillRoots(nil) = empty, want default roots")
+	}
+	// First entry must be the workspace-scoped built-in directory; the
+	// default chain leans on this prefix regardless of platform.
+	if !strings.Contains(roots[0], "builtin") {
+		t.Fatalf("resolveSkillRoots(nil)[0] = %q, want builtin path", roots[0])
+	}
+}
+
+// TestResolveSkillRootsExplicitOverridesDefault confirms that a non-nil
+// SkillRoots — even one with a single entry — completely replaces the
+// defaults so callers can run hermetic skill discovery.
+func TestResolveSkillRootsExplicitOverridesDefault(t *testing.T) {
+	t.Parallel()
+
+	custom := []string{"/tmp/only-this"}
+	roots := resolveSkillRoots(AgentConfig{SkillRoots: custom}, "/tmp/workspace")
+	if len(roots) != 1 || roots[0] != "/tmp/only-this" {
+		t.Fatalf("resolveSkillRoots(custom) = %#v, want [%q]", roots, custom[0])
+	}
+}
+
+// TestResolveSkillRootsEmptyNonNilDisablesDiscovery confirms that an
+// explicitly empty slice still suppresses the default chain — this is the
+// "hermetic discovery, no roots at all" mode coagent and similar adopters
+// rely on.
+func TestResolveSkillRootsEmptyNonNilDisablesDiscovery(t *testing.T) {
+	t.Parallel()
+
+	roots := resolveSkillRoots(AgentConfig{SkillRoots: []string{}}, "/tmp/workspace")
+	if roots == nil {
+		t.Fatal("resolveSkillRoots(empty) = nil, want non-nil empty slice")
+	}
+	if len(roots) != 0 {
+		t.Fatalf("resolveSkillRoots(empty) = %#v, want zero-length slice", roots)
+	}
+}
+
 func TestNewAgentRunCompactClose(t *testing.T) {
 	t.Parallel()
 

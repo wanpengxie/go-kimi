@@ -120,6 +120,23 @@ type AgentConfig struct {
 	// SandboxBackend already redirects the standard tools (it does not
 	// suppress them), which is the documented behaviour for that path.
 	DisableStandardSandboxTools bool
+
+	// SkillRoots optionally overrides the directories that NewAgent scans
+	// for SKILL.md definitions.
+	//
+	// Semantics:
+	//   nil           → fall back to skill.DefaultSkillRoots(workDir)
+	//                   (builtin/skills + $HOME/.kimi/skills + workDir/.kimi/skills).
+	//   non-nil       → use the slice as-is, in ascending priority order
+	//                   (later roots override earlier roots on name conflict).
+	//                   Even an empty non-nil slice disables default
+	//                   discovery entirely — this lets adopters run
+	//                   hermetic skill discovery without picking up
+	//                   arbitrary files from the user's home directory.
+	//
+	// Note: a SKILL.md that fails to parse is logged as a warning and
+	// skipped; it never aborts NewAgent.
+	SkillRoots []string
 }
 
 // Agent is one assembled SDK runtime facade.
@@ -299,13 +316,20 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 		ID:   strings.TrimSpace(sess.ID),
 	})
 
-	rootSkills, err := skill.DiscoverFromRoots(skill.DefaultSkillRoots(workDir))
+	rootSkills, parseErrs, err := skill.DiscoverFromRoots(resolveSkillRoots(cfg, workDir))
 	if err != nil {
 		if mcpLoader != nil {
 			_ = mcpLoader.Close()
 		}
 		cleanupWire()
 		return nil, fmt.Errorf("kimi: discover skills: %w", err)
+	}
+	for _, pe := range parseErrs {
+		// Single-file parse failures are reported but do not abort
+		// agent boot — DiscoverFromRoots already filtered them out of
+		// the returned skill map. Surface as a warning so deployments
+		// keep working even when a user-installed SKILL.md is malformed.
+		fmt.Fprintf(os.Stderr, "kimi: skip skill %q: %v\n", pe.Path, pe.Err)
 	}
 	skill.RegisterSkills(engine, rootSkills)
 
@@ -932,6 +956,19 @@ func openSession(workDir, sessionID string) (*session.Session, error) {
 		return nil, fmt.Errorf("kimi: create session: %w", err)
 	}
 	return sess, nil
+}
+
+// resolveSkillRoots returns the skill-discovery roots NewAgent should scan.
+//
+// A nil cfg.SkillRoots means "use the historical default" (built-in / user /
+// project). A non-nil slice — including a non-nil empty slice — is honoured
+// verbatim, which lets callers run hermetic skill discovery that ignores
+// $HOME/.kimi/skills and similar stray directories.
+func resolveSkillRoots(cfg AgentConfig, workDir string) []string {
+	if cfg.SkillRoots == nil {
+		return skill.DefaultSkillRoots(workDir)
+	}
+	return cfg.SkillRoots
 }
 
 func resolveWorkDir(workDir string) (string, error) {

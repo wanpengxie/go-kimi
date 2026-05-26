@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -17,9 +18,12 @@ func TestDiscoverSkillsFindsSubDirSkills(t *testing.T) {
 		t.Fatalf("os.MkdirAll() error = %v", err)
 	}
 
-	skills, err := DiscoverSkills(root)
+	skills, parseErrs, err := DiscoverSkills(root)
 	if err != nil {
 		t.Fatalf("DiscoverSkills() error = %v", err)
+	}
+	if len(parseErrs) != 0 {
+		t.Fatalf("DiscoverSkills() parseErrs = %v, want none", parseErrs)
 	}
 	if len(skills) != 2 {
 		t.Fatalf("len(skills) = %d, want 2", len(skills))
@@ -35,9 +39,12 @@ func TestDiscoverSkillsFindsSubDirSkills(t *testing.T) {
 func TestDiscoverSkillsMissingRootReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
-	skills, err := DiscoverSkills(filepath.Join(t.TempDir(), "missing"))
+	skills, parseErrs, err := DiscoverSkills(filepath.Join(t.TempDir(), "missing"))
 	if err != nil {
 		t.Fatalf("DiscoverSkills() error = %v", err)
+	}
+	if len(parseErrs) != 0 {
+		t.Fatalf("DiscoverSkills() parseErrs = %v, want none", parseErrs)
 	}
 	if len(skills) != 0 {
 		t.Fatalf("len(skills) = %d, want 0", len(skills))
@@ -54,9 +61,12 @@ func TestDiscoverFromRootsHigherPriorityOverrides(t *testing.T) {
 	writeSkillMarkdown(t, filepath.Join(high, "demo", FileName), "demo", "from-high", "high body")
 	writeSkillMarkdown(t, filepath.Join(low, "only-low", FileName), "only-low", "low", "low")
 
-	skills, err := DiscoverFromRoots([]string{low, high})
+	skills, parseErrs, err := DiscoverFromRoots([]string{low, high})
 	if err != nil {
 		t.Fatalf("DiscoverFromRoots() error = %v", err)
+	}
+	if len(parseErrs) != 0 {
+		t.Fatalf("DiscoverFromRoots() parseErrs = %v, want none", parseErrs)
 	}
 	if len(skills) != 2 {
 		t.Fatalf("len(skills) = %d, want 2", len(skills))
@@ -79,9 +89,12 @@ func TestDiscoverFromRootsNormalizesNameCase(t *testing.T) {
 	writeSkillMarkdown(t, filepath.Join(low, "demo", FileName), "Demo", "from-low", "low body")
 	writeSkillMarkdown(t, filepath.Join(high, "demo", FileName), "demo", "from-high", "high body")
 
-	skills, err := DiscoverFromRoots([]string{low, high})
+	skills, parseErrs, err := DiscoverFromRoots([]string{low, high})
 	if err != nil {
 		t.Fatalf("DiscoverFromRoots() error = %v", err)
+	}
+	if len(parseErrs) != 0 {
+		t.Fatalf("DiscoverFromRoots() parseErrs = %v, want none", parseErrs)
 	}
 	if len(skills) != 1 {
 		t.Fatalf("len(skills) = %d, want 1", len(skills))
@@ -119,6 +132,84 @@ func TestDefaultSkillRootsOrder(t *testing.T) {
 
 	if roots[0] != wantBuiltin || roots[1] != wantUser || roots[2] != wantProject {
 		t.Fatalf("roots = %#v, want [%q %q %q]", roots, wantBuiltin, wantUser, wantProject)
+	}
+}
+
+// TestDiscoverSkillsPartialFailureCollectsParseErrors verifies that an
+// invalid SKILL.md does not short-circuit discovery: the valid sibling is
+// still returned, and the bad file is reported via ParseErrors.
+func TestDiscoverSkillsPartialFailureCollectsParseErrors(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkillMarkdown(t, filepath.Join(root, "good", FileName), "good", "good desc", "body")
+
+	badPath := filepath.Join(root, "bad", FileName)
+	if err := os.MkdirAll(filepath.Dir(badPath), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+	// Missing closing `---` marker → parseFrontmatter fails.
+	if err := os.WriteFile(badPath, []byte("---\nname: bad\ndescription: oops\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	skills, parseErrs, err := DiscoverSkills(root)
+	if err != nil {
+		t.Fatalf("DiscoverSkills() error = %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "good" {
+		t.Fatalf("skills = %#v, want one good skill", skills)
+	}
+	if len(parseErrs) != 1 {
+		t.Fatalf("parseErrs = %v, want one entry", parseErrs)
+	}
+	if parseErrs[0].Path != badPath {
+		t.Fatalf("parseErrs[0].Path = %q, want %q", parseErrs[0].Path, badPath)
+	}
+	if parseErrs[0].Err == nil {
+		t.Fatal("parseErrs[0].Err = nil, want underlying error")
+	}
+	if !strings.Contains(parseErrs[0].Error(), badPath) {
+		t.Fatalf("parseErrs[0].Error() = %q, want path embedded", parseErrs[0].Error())
+	}
+}
+
+// TestDiscoverFromRootsAggregatesParseErrorsAcrossRoots verifies that parse
+// errors from multiple roots are concatenated and that the valid skill from
+// the failing root is still merged.
+func TestDiscoverFromRootsAggregatesParseErrorsAcrossRoots(t *testing.T) {
+	t.Parallel()
+
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+
+	writeSkillMarkdown(t, filepath.Join(rootA, "alpha", FileName), "alpha", "alpha desc", "body")
+	// Invalid skill in rootA.
+	badPathA := filepath.Join(rootA, "broken", FileName)
+	if err := os.MkdirAll(filepath.Dir(badPathA), 0o755); err != nil {
+		t.Fatalf("os.MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(badPathA, []byte("not yaml\n"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	writeSkillMarkdown(t, filepath.Join(rootB, "beta", FileName), "beta", "beta desc", "body")
+
+	skills, parseErrs, err := DiscoverFromRoots([]string{rootA, rootB})
+	if err != nil {
+		t.Fatalf("DiscoverFromRoots() error = %v", err)
+	}
+	if len(skills) != 2 {
+		t.Fatalf("len(skills) = %d, want 2 (alpha + beta)", len(skills))
+	}
+	if skills["alpha"] == nil || skills["beta"] == nil {
+		t.Fatalf("skills = %#v, want both alpha and beta", skills)
+	}
+	if len(parseErrs) != 1 {
+		t.Fatalf("parseErrs = %v, want exactly one", parseErrs)
+	}
+	if parseErrs[0].Path != badPathA {
+		t.Fatalf("parseErrs[0].Path = %q, want %q", parseErrs[0].Path, badPathA)
 	}
 }
 

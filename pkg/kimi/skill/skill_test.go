@@ -123,6 +123,108 @@ body
 	}
 }
 
+// TestParseSkillMarkdownBlockScalarDescription verifies that YAML block
+// scalar syntax (`description: |` followed by indented multi-line text) is
+// parsed correctly. The pre-yaml parser treated continuation lines as new
+// keys and rejected the file outright.
+func TestParseSkillMarkdownBlockScalarDescription(t *testing.T) {
+	t.Parallel()
+
+	markdown := `---
+name: kimi-webbridge
+description: |
+  Kimi WebBridge lets AI control the user's real browser — navigate, click, type.
+  Use this skill whenever the user wants to interact with websites, automate
+  browser tasks, or perform any action requiring a real browser.
+---
+# Kimi WebBridge
+body content
+`
+
+	sk, err := parseSkillMarkdown("/tmp/skills/kimi-webbridge", markdown)
+	if err != nil {
+		t.Fatalf("parseSkillMarkdown() error = %v", err)
+	}
+	if sk.Name != "kimi-webbridge" {
+		t.Fatalf("skill.Name = %q, want kimi-webbridge", sk.Name)
+	}
+	if !strings.Contains(sk.Description, "Kimi WebBridge lets AI control") {
+		t.Fatalf("skill.Description = %q, want first sentence", sk.Description)
+	}
+	if !strings.Contains(sk.Description, "interact with websites") {
+		t.Fatalf("skill.Description = %q, want continuation line", sk.Description)
+	}
+	if !strings.Contains(sk.Content, "# Kimi WebBridge") {
+		t.Fatalf("skill.Content = %q, want body intact", sk.Content)
+	}
+}
+
+// TestParseSkillMarkdownFoldedScalarDescription covers the `>` folded form,
+// where line breaks become spaces.
+func TestParseSkillMarkdownFoldedScalarDescription(t *testing.T) {
+	t.Parallel()
+
+	markdown := `---
+name: folded-demo
+description: >
+  This description spans
+  multiple lines but should
+  fold into one paragraph.
+---
+body
+`
+
+	sk, err := parseSkillMarkdown("/tmp/skills/folded-demo", markdown)
+	if err != nil {
+		t.Fatalf("parseSkillMarkdown() error = %v", err)
+	}
+	if !strings.Contains(sk.Description, "spans multiple lines") {
+		t.Fatalf("skill.Description = %q, want folded content", sk.Description)
+	}
+}
+
+// TestParseSkillMarkdownQuotedStringWithColon ensures that YAML quoted
+// scalars survive — the legacy parser would split on the first `:` and
+// truncate.
+func TestParseSkillMarkdownQuotedStringWithColon(t *testing.T) {
+	t.Parallel()
+
+	markdown := `---
+name: quoted
+description: "Use when X: do Y instead"
+---
+body
+`
+
+	sk, err := parseSkillMarkdown("/tmp/skills/quoted", markdown)
+	if err != nil {
+		t.Fatalf("parseSkillMarkdown() error = %v", err)
+	}
+	if sk.Description != "Use when X: do Y instead" {
+		t.Fatalf("skill.Description = %q, want full quoted value", sk.Description)
+	}
+}
+
+// TestParseSkillMarkdownInvalidYAMLReturnsError verifies that genuinely
+// malformed YAML (not just unrecognized layout) yields a parse error with
+// useful context.
+func TestParseSkillMarkdownInvalidYAMLReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseSkillMarkdown("/tmp/skills/broken", `---
+name: broken
+description: "unterminated
+---
+body
+`)
+	if err == nil {
+		t.Fatal("parseSkillMarkdown() error = nil, want yaml parse failure")
+	}
+	if !strings.Contains(err.Error(), "frontmatter yaml") {
+		t.Fatalf("parseSkillMarkdown() error = %v, want yaml context", err)
+	}
+}
+
 func TestParseFrontmatterRequiresMarkers(t *testing.T) {
 	t.Parallel()
 
